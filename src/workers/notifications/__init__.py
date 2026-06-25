@@ -1,0 +1,1 @@
+"""Notification event worker infrastructure."""
