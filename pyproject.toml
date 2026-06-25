@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "notification-center"
+version = "0.1.0"
+description = "FastAPI notification center demo with PostgreSQL, Kafka, and Mailpit delivery."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "pydantic>=2.10",
+  "pydantic-settings>=2.7",
+  "sqlalchemy>=2.0",
+  "alembic>=1.14",
+  "psycopg[binary]>=3.2",
+  "pyjwt>=2.10",
+  "aiokafka>=0.12",
+  "prometheus-client>=0.21",
+  "uvicorn[standard]>=0.34",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "pytest-kwparametrize>=0.0.3",
+  "httpx2>=2.4",
+  "ruff>=0.9",
+  "mypy>=1.14",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+markers = [
+  "integration: tests that require external services such as PostgreSQL",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/backend", "src/workers"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["backend", "workers"]

@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: notification_center_test
+          POSTGRES_USER: notification
+          POSTGRES_PASSWORD: notification
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U notification -d notification_center_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Start Redpanda
+        run: |
+          docker run -d --name redpanda \
+            -p 19092:19092 \
+            -p 19644:9644 \
+            docker.redpanda.com/redpandadata/redpanda:v24.3.5 \
+            redpanda start \
+            --smp 1 \
+            --memory 512M \
+            --reserve-memory 0M \
+            --overprovisioned \
+            --node-id 0 \
+            --check=false \
+            --kafka-addr PLAINTEXT://0.0.0.0:9092,OUTSIDE://0.0.0.0:19092 \
+            --advertise-kafka-addr PLAINTEXT://redpanda:9092,OUTSIDE://localhost:19092
+          for i in {1..30}; do
+            docker exec redpanda rpk cluster health | grep -q 'Healthy: true' && exit 0
+            sleep 2
+          done
+          docker logs redpanda
+          exit 1
+
+      - name: Run unit tests
+        run: python -m pytest tests/unit -q
+
+      - name: Run PostgreSQL integration tests
+        env:
+          INTEGRATION_DATABASE_URL: postgresql+psycopg://notification:notification@localhost:55432/notification_center_test
+          INTEGRATION_KAFKA_BOOTSTRAP_SERVERS: localhost:19092
+        run: python -m pytest tests/integration -q
+
+      - name: Run Ruff
+        run: python -m ruff check .
+
+      - name: Run mypy
+        run: python -m mypy src tests
+
+      - name: Build Docker image
+        run: docker build -t notification-center:${{ github.sha }} .
