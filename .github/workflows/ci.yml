@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_DB: notification_center_test
           POSTGRES_USER: notification
@@ -25,11 +25,11 @@ jobs:
           --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Install dependencies
         run: |
@@ -41,7 +41,7 @@ jobs:
           docker run -d --name redpanda \
             -p 19092:19092 \
             -p 19644:9644 \
-            docker.redpanda.com/redpandadata/redpanda:v24.3.5 \
+            docker.redpanda.com/redpandadata/redpanda:v26.1.10 \
             redpanda start \
             --smp 1 \
             --memory 512M \
@@ -52,7 +52,7 @@ jobs:
             --kafka-addr PLAINTEXT://0.0.0.0:9092,OUTSIDE://0.0.0.0:19092 \
             --advertise-kafka-addr PLAINTEXT://redpanda:9092,OUTSIDE://localhost:19092
           for i in {1..30}; do
-            docker exec redpanda rpk cluster health | grep -q 'Healthy: true' && exit 0
+            docker exec redpanda rpk cluster health | grep -q 'Healthy:[[:space:]]*true' && exit 0
             sleep 2
           done
           docker logs redpanda

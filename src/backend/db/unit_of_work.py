@@ -19,7 +19,7 @@ class SqlAlchemyUnitOfWork:
         self.processed_events: ProcessedEventRepository
         self.users: UserRepository
 
-    def __enter__(self) -> "SqlAlchemyUnitOfWork":
+    def __enter__(self) -> SqlAlchemyUnitOfWork:
         self.session = self._session_factory()
         self.notifications = NotificationRepository(self.session)
         self.outbox = OutboxRepository(self.session)

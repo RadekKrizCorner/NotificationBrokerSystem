@@ -20,7 +20,7 @@ class FakeSMTP:
     def __init__(self) -> None:
         self.messages: list[EmailMessage] = []
 
-    def __enter__(self) -> "FakeSMTP":
+    def __enter__(self) -> FakeSMTP:
         return self
 
     def __exit__(

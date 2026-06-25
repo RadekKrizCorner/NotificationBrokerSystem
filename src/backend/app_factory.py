@@ -32,7 +32,7 @@ class BackendApplicationFactory:
         self._metrics = metrics
 
     @classmethod
-    def from_env(cls) -> "BackendApplicationFactory":
+    def from_env(cls) -> BackendApplicationFactory:
         return cls(settings=Settings())
 
     def create(self) -> FastAPI:

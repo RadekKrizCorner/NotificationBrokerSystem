@@ -1,16 +1,38 @@
 # NotificationBrokerSystem
 
+```mermaid
+flowchart TD
+    subgraph flow["Notification flow"]
+        direction LR
+        clients["Web app<br/>Internal services"] --> api["FastAPI backend"]
+        api --> db[("PostgreSQL<br/>notifications, deliveries, outbox")]
+        db --> outbox["Outbox publisher"]
+        outbox --> kafka[("Redpanda Kafka")]
+        kafka --> consumer["Notification consumer<br/>audience fanout"]
+        consumer --> delivery["Delivery workers<br/>web + email"]
+    end
+
+    subgraph observability["Observability"]
+        direction LR
+        runtime["API, workers, PostgreSQL, Kafka"] --> prometheus["Prometheus metrics"]
+        prometheus --> grafana["Grafana dashboards"]
+    end
+
+    flow ~~~ observability
+    linkStyle 8 stroke:transparent
+```
+
 Persistent notification center demo for platform users. The service accepts notifications over
 FastAPI, persists requests and per-user deliveries in PostgreSQL, fans out work through Kafka, and
 delivers through web and email channels.
 
 ## Tech Stack
 
-![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.138+-009688?logo=fastapi&logoColor=white)
 ![Pydantic](https://img.shields.io/badge/Pydantic-2.x-E92063?logo=pydantic&logoColor=white)
 ![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.x-D71F00)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)
 ![Kafka](https://img.shields.io/badge/Kafka-Redpanda-000000?logo=apachekafka&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 ![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C?logo=prometheus&logoColor=white)
@@ -44,6 +66,32 @@ To reset all local state:
 ```bash
 docker compose down -v
 ```
+
+## Project Layout
+
+- `src/backend/api`: FastAPI dependencies, route registration, routers, and Pydantic
+  request/response schemas.
+- `src/backend/core`: cross-cutting runtime concerns such as settings, JWT auth, cursors, and
+  Prometheus metrics.
+- `src/backend/db`: SQLAlchemy models, repositories, session factory, and unit-of-work boundary.
+- `src/backend/domain`: enums, read models, results, and value objects shared across services.
+- `src/backend/services`: notification creation, audience resolution, fanout, retry, web
+  notification reads, and pipeline metrics.
+- `src/workers`: Kafka clients, outbox publisher, notification consumer, delivery workers, and
+  workload generator.
+- `src/migrations`: Alembic environment and schema revisions.
+- `ops`: Prometheus and Grafana provisioning used by Docker Compose.
+- `tests/unit` and `tests/integration`: local unit coverage plus PostgreSQL/Redpanda integration
+  tests.
+
+## Architecture Notes
+
+The implementation uses PostgreSQL as the source of truth and Kafka as the asynchronous processing
+signal. The API writes notification state and outbox events in one transaction; workers then publish,
+fan out, and deliver from durable database state.
+
+See [docs/architecture.md](docs/architecture.md) for the detailed tradeoffs around idempotency,
+outbox publishing, retry/replay, delivery semantics, and production hardening.
 
 ## Baseline Throughput
 
@@ -100,6 +148,18 @@ Dashboards included:
 These dashboards are meant to answer the operational questions first: is the API healthy, where is
 the queue/backlog, and which delivery channel needs more worker capacity?
 
+## Known Limitations
+
+- Users, groups, and labels are local demo data, not a real identity directory.
+- JWT validation is intentionally local and static; production needs issuer validation, key
+  rotation, and secret management.
+- Email delivery uses Mailpit locally and does not model provider bounces or provider-side
+  idempotency.
+- Retry is controlled business replay from PostgreSQL delivery state, not blind Kafka topic rewind.
+- Dead-letter queues, operator replay tooling, Kubernetes manifests, and autoscaling policies are
+  deferred production hardening work.
+- The baseline throughput numbers are from local Docker Desktop, not a production capacity claim.
+
 ## Development Checks
 
 Unit tests run without external services:
@@ -110,3 +170,11 @@ Unit tests run without external services:
 
 PostgreSQL and Redpanda integration tests use `docker-compose.integration.yml` when deeper local
 validation is needed.
+
+```bash
+docker compose -f docker-compose.integration.yml up -d postgres-integration redpanda-integration
+INTEGRATION_DATABASE_URL=postgresql+psycopg://notification:notification@localhost:55432/notification_center_test \
+INTEGRATION_KAFKA_BOOTSTRAP_SERVERS=localhost:19092 \
+  .venv/bin/python -m pytest tests/integration -q
+docker compose -f docker-compose.integration.yml down
+```

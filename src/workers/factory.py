@@ -58,7 +58,7 @@ class OutboxWorkerFactory:
         self._metrics = metrics
 
     @classmethod
-    def from_env(cls) -> "OutboxWorkerFactory":
+    def from_env(cls) -> OutboxWorkerFactory:
         return cls(settings=Settings())
 
     def create_outbox_publisher(self) -> OutboxPublisher:
@@ -129,7 +129,7 @@ class DeliveryWorkerFactory:
         self._now = now
 
     @classmethod
-    def from_env(cls) -> "DeliveryWorkerFactory":
+    def from_env(cls) -> DeliveryWorkerFactory:
         return cls(settings=Settings())
 
     def create_web_delivery_processor(self) -> DeliveryWorker:
@@ -220,7 +220,7 @@ class NotificationConsumerWorkerFactory:
         self._now = now
 
     @classmethod
-    def from_env(cls) -> "NotificationConsumerWorkerFactory":
+    def from_env(cls) -> NotificationConsumerWorkerFactory:
         return cls(settings=Settings())
 
     def create_notification_consumer_worker(self) -> NotificationConsumerWorker:
@@ -274,7 +274,7 @@ class WorkloadGeneratorFactory:
         self._run_id = run_id
 
     @classmethod
-    def from_env(cls) -> "WorkloadGeneratorFactory":
+    def from_env(cls) -> WorkloadGeneratorFactory:
         return cls(settings=Settings())
 
     def create_workload_generator(self) -> WorkloadGenerator:

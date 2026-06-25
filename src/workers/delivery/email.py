@@ -46,7 +46,7 @@ class EmailDeliveryAdapter:
         port: int = 1025,
         from_address: str = "notifications@example.test",
         timeout_seconds: float = 10.0,
-    ) -> "EmailDeliveryAdapter":
+    ) -> EmailDeliveryAdapter:
         return cls(
             smtp_factory=lambda: SMTP(host=host, port=port, timeout=timeout_seconds),
             from_address=from_address,

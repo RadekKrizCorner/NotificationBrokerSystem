@@ -1,0 +1,225 @@
+name: notification-broker-system
+
+services:
+  migrations:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      NOTIFICATION_CENTER_DATABASE_URL: postgresql+psycopg://notification:notification@postgres:5432/notification_center
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  seed-demo-data:
+    build: .
+    command: ["python", "-m", "backend.runtime", "seed-demo-data"]
+    environment:
+      NOTIFICATION_CENTER_DATABASE_URL: postgresql+psycopg://notification:notification@postgres:5432/notification_center
+      NOTIFICATION_CENTER_DEMO_SEED_USER_COUNT: 5000
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+
+  api:
+    build: .
+    command: ["python", "-m", "backend.runtime", "api"]
+    environment:
+      NOTIFICATION_CENTER_DATABASE_URL: postgresql+psycopg://notification:notification@postgres:5432/notification_center
+      NOTIFICATION_CENTER_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      NOTIFICATION_CENTER_SMTP_HOST: mailpit
+      NOTIFICATION_CENTER_API_HOST: 0.0.0.0
+      NOTIFICATION_CENTER_API_PORT: 8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      seed-demo-data:
+        condition: service_completed_successfully
+      redpanda:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+
+  outbox-publisher:
+    build: .
+    command: ["python", "-m", "backend.runtime", "outbox-publisher"]
+    environment:
+      NOTIFICATION_CENTER_DATABASE_URL: postgresql+psycopg://notification:notification@postgres:5432/notification_center
+      NOTIFICATION_CENTER_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    depends_on:
+      seed-demo-data:
+        condition: service_completed_successfully
+      redpanda:
+        condition: service_healthy
+
+  notification-consumer:
+    build: .
+    command: ["python", "-m", "backend.runtime", "notification-consumer"]
+    environment:
+      NOTIFICATION_CENTER_DATABASE_URL: postgresql+psycopg://notification:notification@postgres:5432/notification_center
+      NOTIFICATION_CENTER_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    depends_on:
+      seed-demo-data:
+        condition: service_completed_successfully
+      redpanda:
+        condition: service_healthy
+
+  web-delivery-worker:
+    build: .
+    command: ["python", "-m", "backend.runtime", "web-delivery-worker"]
+    environment:
+      NOTIFICATION_CENTER_DATABASE_URL: postgresql+psycopg://notification:notification@postgres:5432/notification_center
+      NOTIFICATION_CENTER_WEB_DELIVERY_WORKER_ID: web-delivery-worker-1
+      NOTIFICATION_CENTER_DELIVERY_BATCH_SIZE: 500
+      NOTIFICATION_CENTER_DELIVERY_POLL_INTERVAL_SECONDS: 0.2
+    depends_on:
+      seed-demo-data:
+        condition: service_completed_successfully
+
+  email-delivery-worker:
+    build: .
+    command: ["python", "-m", "backend.runtime", "email-delivery-worker"]
+    environment:
+      NOTIFICATION_CENTER_DATABASE_URL: postgresql+psycopg://notification:notification@postgres:5432/notification_center
+      NOTIFICATION_CENTER_EMAIL_DELIVERY_WORKER_ID: email-delivery-worker-1
+      NOTIFICATION_CENTER_SMTP_HOST: mailpit
+      NOTIFICATION_CENTER_DELIVERY_BATCH_SIZE: 500
+      NOTIFICATION_CENTER_DELIVERY_POLL_INTERVAL_SECONDS: 0.2
+    depends_on:
+      seed-demo-data:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
+
+  workload-generator:
+    build: .
+    command: ["python", "-m", "backend.runtime", "workload-generator"]
+    environment:
+      NOTIFICATION_CENTER_WORKLOAD_API_BASE_URL: http://api:8000
+      NOTIFICATION_CENTER_WORKLOAD_NOTIFICATIONS_PER_WINDOW: 150
+      NOTIFICATION_CENTER_WORKLOAD_WINDOW_SECONDS: 300
+      NOTIFICATION_CENTER_WORKLOAD_REQUEST_TIMEOUT_SECONDS: 5.0
+    depends_on:
+      api:
+        condition: service_started
+      outbox-publisher:
+        condition: service_started
+      notification-consumer:
+        condition: service_started
+      web-delivery-worker:
+        condition: service_started
+      email-delivery-worker:
+        condition: service_started
+
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: notification_center
+      POSTGRES_USER: notification
+      POSTGRES_PASSWORD: notification
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notification -d notification_center"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.19.1
+    environment:
+      DATA_SOURCE_NAME: postgresql://notification:notification@postgres:5432/notification_center?sslmode=disable
+    ports:
+      - "9187:9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.2
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=10s
+    privileged: true
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.1.10
+    command:
+      - redpanda
+      - start
+      - --smp
+      - "1"
+      - --memory
+      - 512M
+      - --reserve-memory
+      - 0M
+      - --overprovisioned
+      - --node-id
+      - "0"
+      - --check=false
+      - --kafka-addr
+      - PLAINTEXT://0.0.0.0:9092,OUTSIDE://0.0.0.0:19092
+      - --advertise-kafka-addr
+      - PLAINTEXT://redpanda:9092,OUTSIDE://localhost:9092
+    ports:
+      - "9092:19092"
+      - "9644:9644"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:[[:space:]]*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit:v1.30.2
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  prometheus:
+    image: prom/prometheus:v3.12.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - redpanda
+      - cadvisor
+
+  grafana:
+    image: grafana/grafana:13.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_METRICS_ENABLED: "true"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres-data:
+  redpanda-data:
+  prometheus-data:
+  grafana-data:
