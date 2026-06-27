@@ -1,0 +1,26 @@
+@@ -135,13 +135,20 @@
+         adapter = self._adapters.get(channel)
+         if adapter is None:
+             return DeliveryOutcome(
+                 status=DeliveryOutcomeStatus.FAILED_TERMINAL,
+                 error_code="missing_adapter",
+                 error_message=f"missing delivery adapter for {channel.value}",
+             )
+ 
+-        return adapter.deliver(
+-            delivery=delivery,
+-            notification=delivery.notification,
+-            user=delivery.user,
+-        )
++        try:
++            return adapter.deliver(
++                delivery=delivery,
++                notification=delivery.notification,
++                user=delivery.user,
++            )
++        except Exception as exc:
++            return DeliveryOutcome(
++                status=DeliveryOutcomeStatus.FAILED_RETRYABLE,
++                error_code="adapter_exception",
++                error_message=f"delivery adapter raised {type(exc).__name__}",
++            )

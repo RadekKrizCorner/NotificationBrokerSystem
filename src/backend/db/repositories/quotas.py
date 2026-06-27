@@ -24,9 +24,7 @@ class ProducerQuotaRepository:
         elif bind.dialect.name == "sqlite":
             insert_statement = sqlite_insert(ProducerQuotaModel)
         else:
-            raise RuntimeError(
-                f"producer quotas do not support {bind.dialect.name}"
-            )
+            raise RuntimeError(f"producer quotas do not support {bind.dialect.name}")
 
         statement = (
             insert_statement.values(

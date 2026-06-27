@@ -48,9 +48,7 @@ class GroupModel(Base):
 
 class UserGroupModel(Base):
     __tablename__ = "user_groups"
-    __table_args__ = (
-        Index("ix_user_groups_lookup", "group_id", "user_id"),
-    )
+    __table_args__ = (Index("ix_user_groups_lookup", "group_id", "user_id"),)
 
     user_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),

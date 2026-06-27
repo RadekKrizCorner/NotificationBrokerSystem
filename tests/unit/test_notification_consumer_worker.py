@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -16,7 +17,11 @@ from backend.db.models import (
 )
 from backend.db.unit_of_work import SqlAlchemyUnitOfWork
 from backend.domain.results import NotificationFanoutResult
-from workers.kafka.consumer import NotificationKafkaMessage
+from workers.kafka.consumer import (
+    InvalidNotificationKafkaMessage,
+    KafkaRawMessage,
+    NotificationKafkaMessage,
+)
 from workers.notifications.consumer import NotificationConsumerWorker
 
 SessionFactory = sessionmaker[Session]
@@ -46,12 +51,16 @@ def session_factory() -> Iterator[SessionFactory]:
 
 
 class RecordingNotificationEventConsumer:
-    def __init__(self, messages: list[NotificationKafkaMessage]) -> None:
+    def __init__(
+        self, messages: list[NotificationKafkaMessage | InvalidNotificationKafkaMessage]
+    ) -> None:
         self.messages = messages
         self.commits = 0
         self.poll_timeouts: list[float] = []
 
-    def consume_one(self, *, timeout_seconds: float) -> NotificationKafkaMessage | None:
+    def consume_one(
+        self, *, timeout_seconds: float
+    ) -> NotificationKafkaMessage | InvalidNotificationKafkaMessage | None:
         self.poll_timeouts.append(timeout_seconds)
         if not self.messages:
             return None
@@ -84,6 +93,17 @@ class FailingNotificationRequestedHandler:
         raise RuntimeError("fanout failed")
 
 
+class RecordingDeadLetterPublisher:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.messages: list[InvalidNotificationKafkaMessage] = []
+
+    def publish(self, message: InvalidNotificationKafkaMessage) -> None:
+        if self.fail:
+            raise RuntimeError("DLQ unavailable")
+        self.messages.append(message)
+
+
 class NotificationConsumerFixtures:
     now = datetime(2026, 6, 24, 12, 0, tzinfo=UTC)
 
@@ -96,7 +116,14 @@ class NotificationConsumerFixtures:
         event_id = notification_id or uuid4()
         return NotificationKafkaMessage(
             key=str(event_id),
+            event_id=event_id,
+            event_type="notification.requested",
+            occurred_at=NotificationConsumerFixtures.now,
             payload={"notification_id": str(event_id), "source_service": "billing"},
+            raw_message=KafkaRawMessage(
+                key=str(event_id).encode(),
+                value=json.dumps({"schema_version": 1, "event_id": str(event_id)}).encode(),
+            ),
         )
 
     @staticmethod
@@ -105,10 +132,12 @@ class NotificationConsumerFixtures:
         *,
         event_consumer: RecordingNotificationEventConsumer,
         handler: RecordingNotificationRequestedHandler | FailingNotificationRequestedHandler,
+        dead_letter_publisher: RecordingDeadLetterPublisher | None = None,
     ) -> NotificationConsumerWorker:
         return NotificationConsumerWorker(
             event_consumer=event_consumer,
             handler=handler,
+            dead_letter_publisher=dead_letter_publisher or RecordingDeadLetterPublisher(),
             unit_of_work_factory=lambda: NotificationConsumerFixtures.unit_of_work_factory(
                 session_factory
             ),
@@ -209,3 +238,58 @@ class TestNotificationConsumerWorker:
             assert session.scalar(select(func.count(ProcessedEventModel.event_id))) == 0
             assert session.scalar(select(func.count(NotificationRecipientModel.id))) == 0
             assert session.scalar(select(func.count(NotificationDeliveryModel.id))) == 0
+
+    def test_run_once_dead_letters_invalid_message_before_committing(
+        self,
+        session_factory: SessionFactory,
+    ) -> None:
+        raw_message = KafkaRawMessage(
+            key=b"poison",
+            value=b"not-json",
+        )
+        message = InvalidNotificationKafkaMessage(
+            raw_message=raw_message,
+            error_code="invalid_json",
+            error_message="message is not valid JSON",
+        )
+        event_consumer = RecordingNotificationEventConsumer([message])
+        dead_letter_publisher = RecordingDeadLetterPublisher()
+        worker = NotificationConsumerFixtures.worker(
+            session_factory,
+            event_consumer=event_consumer,
+            handler=RecordingNotificationRequestedHandler(),
+            dead_letter_publisher=dead_letter_publisher,
+        )
+
+        result = worker.run_once()
+
+        assert result.received_count == 1
+        assert result.processed_count == 0
+        assert result.dead_lettered_count == 1
+        assert result.committed_count == 1
+        assert event_consumer.commits == 1
+        assert dead_letter_publisher.messages == [message]
+
+    def test_run_once_does_not_commit_when_dead_letter_publish_fails(
+        self,
+        session_factory: SessionFactory,
+    ) -> None:
+        message = InvalidNotificationKafkaMessage(
+            raw_message=KafkaRawMessage(key=b"poison", value=b"not-json"),
+            error_code="invalid_json",
+            error_message="message is not valid JSON",
+        )
+        event_consumer = RecordingNotificationEventConsumer([message])
+        dead_letter_publisher = RecordingDeadLetterPublisher(fail=True)
+        worker = NotificationConsumerFixtures.worker(
+            session_factory,
+            event_consumer=event_consumer,
+            handler=RecordingNotificationRequestedHandler(),
+            dead_letter_publisher=dead_letter_publisher,
+        )
+
+        with pytest.raises(RuntimeError, match="DLQ unavailable"):
+            worker.run_once()
+
+        assert event_consumer.commits == 0
+        assert dead_letter_publisher.messages == []

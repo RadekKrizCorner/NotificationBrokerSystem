@@ -72,10 +72,7 @@ def _principal_from_payload(payload: dict[str, Any]) -> AuthenticatedPrincipal:
     if (
         not isinstance(scopes, list)
         or len(scopes) > 32
-        or any(
-            not isinstance(scope, str) or not scope or len(scope) > 128
-            for scope in scopes
-        )
+        or any(not isinstance(scope, str) or not scope or len(scope) > 128 for scope in scopes)
     ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid scopes")
 

@@ -1,8 +1,12 @@
 import json
+from datetime import UTC, datetime
+from uuid import uuid4
 
-import pytest
-
-from workers.kafka.consumer import KafkaNotificationConsumer, KafkaRawMessage
+from workers.kafka.consumer import (
+    InvalidNotificationKafkaMessage,
+    KafkaNotificationConsumer,
+    KafkaRawMessage,
+)
 
 
 class RecordingRawKafkaConsumer:
@@ -23,11 +27,21 @@ class RecordingRawKafkaConsumer:
 
 class TestKafkaNotificationConsumer:
     def test_consume_one_decodes_json_payload_and_key(self) -> None:
+        event_id = uuid4()
+        occurred_at = datetime(2026, 6, 27, 12, 0, tzinfo=UTC)
         raw_consumer = RecordingRawKafkaConsumer(
             [
                 KafkaRawMessage(
                     key=b"notification-1",
-                    value=json.dumps({"notification_id": "notification-1"}).encode("utf-8"),
+                    value=json.dumps(
+                        {
+                            "schema_version": 1,
+                            "event_id": str(event_id),
+                            "event_type": "notification.requested",
+                            "occurred_at": occurred_at.isoformat(),
+                            "data": {"notification_id": "notification-1"},
+                        }
+                    ).encode("utf-8"),
                 )
             ]
         )
@@ -38,6 +52,9 @@ class TestKafkaNotificationConsumer:
         assert message is not None
         assert message.key == "notification-1"
         assert message.payload == {"notification_id": "notification-1"}
+        assert message.event_id == event_id
+        assert message.event_type == "notification.requested"
+        assert message.occurred_at == occurred_at
         assert raw_consumer.poll_timeouts == [2.5]
 
     def test_consume_one_returns_none_when_no_message_arrives(self) -> None:
@@ -48,14 +65,33 @@ class TestKafkaNotificationConsumer:
 
         assert message is None
 
-    def test_consume_one_rejects_non_json_payload(self) -> None:
+    def test_consume_one_classifies_non_json_payload_for_dead_lettering(self) -> None:
         raw_consumer = RecordingRawKafkaConsumer(
             [KafkaRawMessage(key=b"notification-1", value=b"not-json")]
         )
         consumer = KafkaNotificationConsumer(raw_consumer=raw_consumer)
 
-        with pytest.raises(ValueError, match="valid JSON"):
-            consumer.consume_one(timeout_seconds=1.0)
+        message = consumer.consume_one(timeout_seconds=1.0)
+
+        assert isinstance(message, InvalidNotificationKafkaMessage)
+        assert message.error_code == "invalid_json"
+        assert message.raw_message.value == b"not-json"
+
+    def test_consume_one_rejects_unsupported_schema_version(self) -> None:
+        raw_consumer = RecordingRawKafkaConsumer(
+            [
+                KafkaRawMessage(
+                    key=b"notification-1",
+                    value=json.dumps({"schema_version": 99}).encode(),
+                )
+            ]
+        )
+        consumer = KafkaNotificationConsumer(raw_consumer=raw_consumer)
+
+        message = consumer.consume_one(timeout_seconds=1.0)
+
+        assert isinstance(message, InvalidNotificationKafkaMessage)
+        assert message.error_code == "unsupported_schema_version"
 
     def test_commit_delegates_to_raw_consumer(self) -> None:
         raw_consumer = RecordingRawKafkaConsumer([])

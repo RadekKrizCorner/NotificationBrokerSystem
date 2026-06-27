@@ -76,8 +76,9 @@ class PipelineMetricsRefresher:
 
     def _notification_request_counts(self, session: Session) -> dict[str, int]:
         rows = session.execute(
-            select(NotificationRequestModel.status, func.count(NotificationRequestModel.id))
-            .group_by(NotificationRequestModel.status)
+            select(
+                NotificationRequestModel.status, func.count(NotificationRequestModel.id)
+            ).group_by(NotificationRequestModel.status)
         )
         return {str(status): int(count) for status, count in rows}
 
@@ -91,8 +92,9 @@ class PipelineMetricsRefresher:
 
     def _delivery_counts(self, session: Session) -> dict[str, int]:
         rows = session.execute(
-            select(NotificationDeliveryModel.status, func.count(NotificationDeliveryModel.id))
-            .group_by(NotificationDeliveryModel.status)
+            select(
+                NotificationDeliveryModel.status, func.count(NotificationDeliveryModel.id)
+            ).group_by(NotificationDeliveryModel.status)
         )
         return {str(status): int(count) for status, count in rows}
 
@@ -104,7 +106,4 @@ class PipelineMetricsRefresher:
                 func.count(NotificationDeliveryModel.id),
             ).group_by(NotificationDeliveryModel.channel, NotificationDeliveryModel.status)
         )
-        return {
-            (str(channel), str(status)): int(count)
-            for channel, status, count in rows
-        }
+        return {(str(channel), str(status)): int(count) for channel, status, count in rows}

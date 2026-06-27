@@ -65,6 +65,7 @@ class OutboxPublisherResult:
 @dataclass(frozen=True, slots=True)
 class NotificationConsumerResult:
     received_count: int
+    dead_lettered_count: int
     processed_count: int
     duplicate_count: int
     committed_count: int

@@ -2,9 +2,11 @@ import asyncio
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from importlib import import_module
 from threading import Thread
 from typing import Any, Protocol, cast
+from uuid import UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,7 +18,24 @@ class KafkaRawMessage:
 @dataclass(frozen=True, slots=True)
 class NotificationKafkaMessage:
     key: str
+    event_id: UUID
+    event_type: str
+    occurred_at: datetime
     payload: Mapping[str, object]
+    raw_message: KafkaRawMessage
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidNotificationKafkaMessage:
+    raw_message: KafkaRawMessage
+    error_code: str
+    error_message: str
+
+
+class EnvelopeDecodeError(ValueError):
+    def __init__(self, *, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class RawKafkaConsumerClient(Protocol):
@@ -61,41 +80,126 @@ class AsyncKafkaConsumerFactory(Protocol):
 
 
 class KafkaNotificationConsumer:
+    _supported_event_types = frozenset({"notification.requested", "notification.replay_requested"})
+
     def __init__(self, *, raw_consumer: RawKafkaConsumerClient) -> None:
         self._raw_consumer = raw_consumer
 
-    def consume_one(self, *, timeout_seconds: float) -> NotificationKafkaMessage | None:
+    def consume_one(
+        self,
+        *,
+        timeout_seconds: float,
+    ) -> NotificationKafkaMessage | InvalidNotificationKafkaMessage | None:
         raw_message = self._raw_consumer.consume_one(timeout_seconds=timeout_seconds)
         if raw_message is None:
             return None
 
-        payload = self._decode_payload(raw_message.value)
-        return NotificationKafkaMessage(
-            key=self._decode_key(raw_message.key, payload=payload),
-            payload=payload,
-        )
+        try:
+            return self._decode_message(raw_message)
+        except EnvelopeDecodeError as exc:
+            return InvalidNotificationKafkaMessage(
+                raw_message=raw_message,
+                error_code=exc.code,
+                error_message=str(exc),
+            )
 
     def commit(self) -> None:
         self._raw_consumer.commit()
+
+    def _decode_message(
+        self,
+        raw_message: KafkaRawMessage,
+    ) -> NotificationKafkaMessage:
+        envelope = self._decode_payload(raw_message.value)
+
+        schema_version = envelope.get("schema_version")
+        if schema_version != 1:
+            raise EnvelopeDecodeError(
+                code="unsupported_schema_version",
+                message="Kafka notification schema_version must be 1",
+            )
+
+        raw_event_id = envelope.get("event_id")
+        try:
+            event_id = UUID(raw_event_id) if isinstance(raw_event_id, str) else None
+        except ValueError as exc:
+            raise EnvelopeDecodeError(
+                code="invalid_event_id",
+                message="Kafka notification event_id must be a UUID",
+            ) from exc
+        if event_id is None:
+            raise EnvelopeDecodeError(
+                code="invalid_event_id",
+                message="Kafka notification event_id must be a UUID",
+            )
+
+        event_type = envelope.get("event_type")
+        if not isinstance(event_type, str) or event_type not in self._supported_event_types:
+            raise EnvelopeDecodeError(
+                code="unsupported_event_type",
+                message="Kafka notification event_type is unsupported",
+            )
+
+        raw_occurred_at = envelope.get("occurred_at")
+        try:
+            occurred_at = (
+                datetime.fromisoformat(raw_occurred_at)
+                if isinstance(raw_occurred_at, str)
+                else None
+            )
+        except ValueError as exc:
+            raise EnvelopeDecodeError(
+                code="invalid_occurred_at",
+                message="Kafka notification occurred_at must be ISO-8601",
+            ) from exc
+        if occurred_at is None or occurred_at.tzinfo is None:
+            raise EnvelopeDecodeError(
+                code="invalid_occurred_at",
+                message="Kafka notification occurred_at must include a timezone",
+            )
+
+        data = envelope.get("data")
+        if not isinstance(data, dict):
+            raise EnvelopeDecodeError(
+                code="invalid_data",
+                message="Kafka notification data must be an object",
+            )
+
+        return NotificationKafkaMessage(
+            key=self._decode_key(raw_message.key, event_id=event_id),
+            event_id=event_id,
+            event_type=event_type,
+            occurred_at=occurred_at,
+            payload=cast(Mapping[str, object], data),
+            raw_message=raw_message,
+        )
 
     def _decode_payload(self, value: bytes) -> Mapping[str, object]:
         try:
             decoded = json.loads(value.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("Kafka notification payload must be valid JSON") from exc
+            raise EnvelopeDecodeError(
+                code="invalid_json",
+                message="Kafka notification payload must be valid JSON",
+            ) from exc
 
         if not isinstance(decoded, dict):
-            raise ValueError("Kafka notification payload must be a JSON object")
+            raise EnvelopeDecodeError(
+                code="invalid_envelope",
+                message="Kafka notification envelope must be an object",
+            )
         return cast(Mapping[str, object], decoded)
 
-    def _decode_key(self, key: bytes | None, *, payload: Mapping[str, object]) -> str:
-        if key is not None:
+    def _decode_key(self, key: bytes | None, *, event_id: UUID) -> str:
+        if key is None:
+            return str(event_id)
+        try:
             return key.decode("utf-8")
-
-        notification_id = payload.get("notification_id")
-        if isinstance(notification_id, str):
-            return notification_id
-        raise ValueError("Kafka notification message key is required")
+        except UnicodeDecodeError as exc:
+            raise EnvelopeDecodeError(
+                code="invalid_key",
+                message="Kafka notification key must be UTF-8",
+            ) from exc
 
 
 class AioKafkaConsumerClient:

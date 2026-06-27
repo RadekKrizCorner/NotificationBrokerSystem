@@ -23,7 +23,11 @@ from backend.domain.enums import (
 )
 from backend.services.notification_fanout_service import NotificationFanoutService
 from workers.kafka.consumer import AioKafkaConsumerClient, KafkaNotificationConsumer
-from workers.kafka.publisher import AioKafkaProducerClient, KafkaEventPublisher
+from workers.kafka.publisher import (
+    AioKafkaProducerClient,
+    KafkaDeadLetterPublisher,
+    KafkaEventPublisher,
+)
 from workers.notifications.consumer import NotificationConsumerWorker
 from workers.notifications.requested import NotificationRequestedHandler
 from workers.outbox.publisher import OutboxPublisher
@@ -119,6 +123,10 @@ class TestRedpandaNotificationConsumer:
             )
             worker = NotificationConsumerWorker(
                 event_consumer=KafkaNotificationConsumer(raw_consumer=consumer_client),
+                dead_letter_publisher=KafkaDeadLetterPublisher(
+                    producer=producer_client,
+                    topic=f"{topic}.dlq",
+                ),
                 handler=NotificationRequestedHandler(fanout_service=fanout_service),
                 unit_of_work_factory=lambda: SqlAlchemyUnitOfWork(postgres_session_factory),
                 consumer_name="notification-requested-consumer",
@@ -141,8 +149,14 @@ class TestRedpandaNotificationConsumer:
         with postgres_session_factory() as session:
             assert session.scalar(select(func.count(NotificationRecipientModel.id))) == 2
             assert session.scalar(select(func.count(NotificationDeliveryModel.id))) == 4
-            processed_event = session.get(
-                ProcessedEventModel,
-                (notification_id, "notification-requested-consumer"),
+            processed_event = session.scalar(
+                select(ProcessedEventModel).where(
+                    ProcessedEventModel.consumer_name == "notification-requested-consumer"
+                )
+            )
+            outbox_event = session.scalar(
+                select(OutboxEventModel).where(OutboxEventModel.aggregate_id == notification_id)
             )
             assert processed_event is not None
+            assert outbox_event is not None
+            assert processed_event.event_id == outbox_event.id

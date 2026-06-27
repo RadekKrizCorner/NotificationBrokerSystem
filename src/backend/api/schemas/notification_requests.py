@@ -112,11 +112,7 @@ class CreateNotificationRequest(BaseModel):
         return value
 
     def to_domain(self) -> NotificationCreationInput:
-        labels = (
-            tuple(self.audience.labels.items())
-            if self.audience.labels is not None
-            else None
-        )
+        labels = tuple(self.audience.labels.items()) if self.audience.labels is not None else None
         return NotificationCreationInput(
             message=self.message,
             severity=self.severity,

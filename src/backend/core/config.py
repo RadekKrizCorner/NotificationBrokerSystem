@@ -19,7 +19,9 @@ class Settings(BaseSettings):
     demo_jwt_secret: ClassVar[str] = "change-me-local-secret-please-change"
 
     runtime_mode: Literal["local", "production", "test"] = "local"
-    database_url: str = "postgresql+psycopg://notification:notification@localhost:5432/notification_center"
+    database_url: str = (
+        "postgresql+psycopg://notification:notification@localhost:5432/notification_center"
+    )
     jwt_secret: str = Field(default=demo_jwt_secret, min_length=16)
     jwt_algorithm: Literal["HS256"] = "HS256"
     jwt_issuer: str = Field(default="notification-center", min_length=1, max_length=128)
@@ -50,6 +52,7 @@ class Settings(BaseSettings):
     notification_consumer_name: str = "notification-requested-consumer"
     notification_consumer_topic: str = "notifications.requests"
     notification_consumer_group_id: str = "notification-center-notification-consumer"
+    notification_dead_letter_topic: str = "notifications.requests.dlq"
     notification_consumer_client_id: str = "notification-center-notification-consumer"
     notification_consumer_batch_size: int = Field(default=100, gt=0)
     notification_consumer_poll_timeout_seconds: float = Field(default=1.0, gt=0)
@@ -69,9 +72,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def reject_insecure_production_defaults(self) -> Self:
         if self.runtime_mode == "production" and self.jwt_secret == self.demo_jwt_secret:
-            raise ValueError(
-                "production requires a non-demo JWT secret"
-            )
+            raise ValueError("production requires a non-demo JWT secret")
         return self
 
     @property

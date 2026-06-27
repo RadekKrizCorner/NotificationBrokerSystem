@@ -16,8 +16,13 @@ from workers.delivery.email import EmailDeliveryAdapter
 from workers.delivery.web import WebDeliveryAdapter
 from workers.delivery.worker import DeliveryWorker
 from workers.kafka.consumer import AioKafkaConsumerClient, KafkaNotificationConsumer
-from workers.kafka.publisher import AioKafkaProducerClient, KafkaEventPublisher
+from workers.kafka.publisher import (
+    AioKafkaProducerClient,
+    KafkaDeadLetterPublisher,
+    KafkaEventPublisher,
+)
 from workers.notifications.consumer import (
+    DeadLetterPublisher,
     NotificationConsumerWorker,
     NotificationEventConsumer,
 )
@@ -212,11 +217,13 @@ class NotificationConsumerWorkerFactory:
         settings: Settings,
         session_factory: sessionmaker[Session] | None = None,
         event_consumer: NotificationEventConsumer | None = None,
+        dead_letter_publisher: DeadLetterPublisher | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self.settings = settings
         self._session_factory = session_factory
         self._event_consumer = event_consumer
+        self._dead_letter_publisher = dead_letter_publisher
         self._now = now
 
     @classmethod
@@ -234,6 +241,7 @@ class NotificationConsumerWorkerFactory:
         )
         return NotificationConsumerWorker(
             event_consumer=self._resolved_event_consumer(),
+            dead_letter_publisher=self._resolved_dead_letter_publisher(),
             handler=NotificationRequestedHandler(fanout_service=fanout_service),
             unit_of_work_factory=lambda: SqlAlchemyUnitOfWork(session_factory),
             consumer_name=self.settings.notification_consumer_name,
@@ -258,6 +266,18 @@ class NotificationConsumerWorkerFactory:
             client_id=self.settings.notification_consumer_client_id,
         )
         return KafkaNotificationConsumer(raw_consumer=raw_consumer)
+
+    def _resolved_dead_letter_publisher(self) -> DeadLetterPublisher:
+        if self._dead_letter_publisher is not None:
+            return self._dead_letter_publisher
+        producer = AioKafkaProducerClient(
+            bootstrap_servers=self.settings.kafka_bootstrap_servers,
+            client_id=f"{self.settings.notification_consumer_client_id}-dlq",
+        )
+        return KafkaDeadLetterPublisher(
+            producer=producer,
+            topic=self.settings.notification_dead_letter_topic,
+        )
 
     def _default_now(self) -> datetime:
         return datetime.now(UTC)

@@ -6,6 +6,7 @@ from typing import Protocol
 from uuid import UUID
 
 from backend.core.metrics import PrometheusMetrics
+from backend.db.models import OutboxEventModel
 from backend.db.unit_of_work import SqlAlchemyUnitOfWork
 from backend.domain.enums import OutboxEventStatus
 from backend.domain.results import OutboxPublisherResult
@@ -27,10 +28,8 @@ class ClaimedOutboxEvent:
     event_key: str
     payload: Mapping[str, object]
 
-    occurred_at: datetime
-
-
 class OutboxPublisher:
+
     def __init__(
         self,
         *,
@@ -71,7 +70,6 @@ class OutboxPublisher:
                     event_type=event.event_type,
                     event_key=event.event_key,
                     payload=dict(event.payload),
-                    occurred_at=event.created_at,
                 )
                 for event in events
                 if event.claim_token is not None
@@ -107,84 +105,43 @@ class OutboxPublisher:
             raise ValueError("now must be timezone-aware")
         return now.astimezone(UTC)
 
-    def _event_envelope(self, claim: ClaimedOutboxEvent) -> Mapping[str, object]:
-        occurred_at = claim.occurred_at
-        if occurred_at.tzinfo is None or occurred_at.utcoffset() is None:
-            occurred_at = occurred_at.replace(tzinfo=UTC)
-        else:
-            occurred_at = occurred_at.astimezone(UTC)
-
-        return {
-            "schema_version": 1,
-            "event_id": str(claim.event_id),
-            "event_type": claim.event_type,
-            "occurred_at": occurred_at.isoformat(),
-            "data": dict(claim.payload),
-        }
-
     def _publish_event(
         self,
+        uow: SqlAlchemyUnitOfWork,
         *,
-        claim: ClaimedOutboxEvent,
+        event: OutboxEventModel,
         now: datetime,
-    ) -> OutboxEventStatus | None:
+    ) -> OutboxEventStatus:
         try:
             self._event_publisher.publish(
-                topic=claim.topic,
-                key=claim.event_key,
-                payload=self._event_envelope(claim),
+                topic=event.topic,
+                key=event.event_key,
+                payload=event.payload,
             )
         except Exception as exc:
-            return self._finalize_event(
-                claim=claim,
-                now=now,
-                error_message=str(exc)[:1_000],
+            return uow.outbox.mark_publish_failed(
+                event,
+                failed_at=now,
+                retry_at=now + self._retry_delay,
+                error_message=str(exc),
+                max_attempts=self._max_attempts,
             )
 
-        return self._finalize_event(claim=claim, now=now, error_message=None)
-
-    def _finalize_event(
-        self,
-        *,
-        claim: ClaimedOutboxEvent,
-        now: datetime,
-        error_message: str | None,
-    ) -> OutboxEventStatus | None:
-        with self._unit_of_work_factory() as uow:
-            event = uow.outbox.get_claimed_event_for_update(
-                event_id=claim.event_id,
-                claim_token=claim.claim_token,
-            )
-            if event is None:
-                return None
-
-            if error_message is None:
-                uow.outbox.mark_published(event, published_at=now)
-                status = OutboxEventStatus.PUBLISHED
-            else:
-                status = uow.outbox.mark_publish_failed(
-                    event,
-                    failed_at=now,
-                    retry_at=now + self._retry_delay,
-                    error_message=error_message,
-                    max_attempts=self._max_attempts,
-                )
-            uow.commit()
-            return status
+        uow.outbox.mark_published(event, published_at=now)
+        return OutboxEventStatus.PUBLISHED
 
     def _record_outbox_event_metric(
         self,
         *,
-        event_type: str,
+        event: OutboxEventModel,
         status: OutboxEventStatus,
     ) -> None:
         if self._metrics is None:
             return
-        self._metrics.record_outbox_event(event_type=event_type, status=status.value)
+        self._metrics.record_outbox_event(event_type=event.event_type, status=status.value)
 
-    def _record_oldest_pending_metric(self, *, now: datetime) -> None:
+    def _record_oldest_pending_metric(self, *, uow: SqlAlchemyUnitOfWork, now: datetime) -> None:
         if self._metrics is None:
             return
-        with self._unit_of_work_factory() as uow:
-            age_seconds = uow.outbox.oldest_publishable_event_age_seconds(now=now)
+        age_seconds = uow.outbox.oldest_publishable_event_age_seconds(now=now)
         self._metrics.set_outbox_oldest_pending_seconds(age_seconds)

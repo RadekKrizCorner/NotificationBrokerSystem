@@ -3,7 +3,11 @@ from collections.abc import Mapping
 
 import pytest
 
-from workers.kafka.publisher import KafkaEventPublisher
+from workers.kafka.consumer import InvalidNotificationKafkaMessage, KafkaRawMessage
+from workers.kafka.publisher import (
+    KafkaDeadLetterPublisher,
+    KafkaEventPublisher,
+)
 
 
 class RecordingKafkaProducer:
@@ -85,3 +89,25 @@ class TestKafkaEventPublisher:
             )
 
         assert producer.sent == []
+
+    def test_dead_letter_publisher_preserves_bounded_original_message(self) -> None:
+        producer = RecordingKafkaProducer()
+        publisher = KafkaDeadLetterPublisher(
+            producer=producer,
+            topic="notifications.requests.dlq",
+        )
+        message = InvalidNotificationKafkaMessage(
+            raw_message=KafkaRawMessage(key=b"poison-key", value=b"not-json"),
+            error_code="invalid_json",
+            error_message="payload must be valid JSON",
+        )
+
+        publisher.publish(message)
+
+        assert len(producer.sent) == 1
+        topic, key, value = producer.sent[0]
+        assert topic == "notifications.requests.dlq"
+        assert key == b"poison-key"
+        payload = json.loads(value)
+        assert payload["error"]["code"] == "invalid_json"
+        assert payload["original"]["value_base64"] == "bm90LWpzb24="

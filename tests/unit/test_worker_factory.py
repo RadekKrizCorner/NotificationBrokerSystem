@@ -120,7 +120,16 @@ class TestOutboxWorkerFactory:
             (
                 "notifications.requests",
                 "notification-1",
-                {"notification_id": "notification-1", "source_service": "billing"},
+                {
+                    "schema_version": 1,
+                    "event_id": str(event_id),
+                    "event_type": "notification.requested",
+                    "occurred_at": WorkerFactoryFixtures.now.isoformat(),
+                    "data": {
+                        "notification_id": "notification-1",
+                        "source_service": "billing",
+                    },
+                },
             )
         ]
 

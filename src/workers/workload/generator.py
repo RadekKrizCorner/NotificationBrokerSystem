@@ -65,9 +65,7 @@ class WorkloadNotificationRequestFactory:
         index = sequence - 1
         audience, audience_description = self._audience(index)
         return {
-            "message": (
-                f"Demo workload notification {sequence:06d} for {audience_description}"
-            ),
+            "message": (f"Demo workload notification {sequence:06d} for {audience_description}"),
             "severity": self.severities[index % len(self.severities)],
             "audience": audience,
             "channels": list(self.channel_variants[index % len(self.channel_variants)]),
