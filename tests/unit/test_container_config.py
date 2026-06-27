@@ -11,6 +11,10 @@ class TestContainerConfig:
 
         assert 'CMD ["python", "-m", "backend.runtime", "api"]' in dockerfile
         assert "PYTHONPATH=/app/src" in dockerfile
+        assert "USER notification:notification" in dockerfile
+        assert "uv sync --frozen --no-dev --no-editable" in dockerfile
+        assert "pip install --no-cache-dir --upgrade pip" not in dockerfile
+        assert (ContainerConfigFixtures.root / "uv.lock").is_file()
 
     def test_github_actions_builds_container_image(self) -> None:
         workflow = (ContainerConfigFixtures.root / ".github/workflows/ci.yml").read_text()
@@ -29,6 +33,9 @@ class TestContainerConfig:
         assert "email-delivery-worker:" in compose_file
         assert "  delivery-worker:" not in compose_file
         assert "workload-generator:" in compose_file
+        assert '127.0.0.1:8000:8000' in compose_file
+        assert "/health/ready" in compose_file
+        assert "restart: unless-stopped" in compose_file
         assert 'command: ["python", "-m", "backend.runtime", "workload-generator"]' in compose_file
 
     def test_compose_tunes_local_delivery_and_workload_rates(self) -> None:

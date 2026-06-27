@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
+from backend.api.routers.health import router as health_router
 from backend.api.routers.notifications import router as notifications_router
 from backend.api.routers.users import router as users_router
 from backend.core.config import Settings
@@ -103,6 +104,7 @@ class BackendApplicationFactory:
     def _register_routers(self, app: FastAPI) -> None:
         app.include_router(notifications_router)
         app.include_router(users_router)
+        app.include_router(health_router)
 
     def _resolved_session_factory(self) -> sessionmaker[Session]:
         if self._session_factory is not None:

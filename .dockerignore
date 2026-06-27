@@ -1,8 +1,14 @@
+.coverage
+.env
 .git
+.github
 .idea
 .mypy_cache
 .pytest_cache
 .ruff_cache
 .venv
 __pycache__
+*.db
+*.orig
 *.pyc
+*.rej
