@@ -201,6 +201,7 @@ class DeliveryWorkerFactory:
                 host=self.settings.smtp_host,
                 port=self.settings.smtp_port,
                 from_address=self.settings.smtp_from_address,
+                template_directory=self.settings.email_template_directory,
                 timeout_seconds=self.settings.smtp_timeout_seconds,
             ),
         }

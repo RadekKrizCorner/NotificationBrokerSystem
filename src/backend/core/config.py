@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import ClassVar, Literal, Self
 
 from pydantic import Field, model_validator
@@ -66,8 +67,15 @@ class Settings(BaseSettings):
     workload_run_id: str | None = None
     smtp_host: str = "localhost"
     smtp_port: int = Field(default=1025, gt=0, le=65535)
-    smtp_from_address: str = "notifications@example.test"
+    smtp_from_address: str = Field(
+        default="notifications@example.test",
+        min_length=3,
+        max_length=320,
+        pattern=r"^[^@\s<>]+@[^@\s<>]+$",
+    )
     smtp_timeout_seconds: float = Field(default=10.0, gt=0)
+
+    email_template_directory: Path | None = None
 
     @model_validator(mode="after")
     def reject_insecure_production_defaults(self) -> Self:
