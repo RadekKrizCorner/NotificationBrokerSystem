@@ -237,6 +237,46 @@ class TestNotificationRequestedHandler:
         with pytest.raises(ValueError, match="notification_id"):
             handler.handle({"source_service": "billing"})
 
+    def test_large_fanout_uses_a_bounded_number_of_database_round_trips(
+        self,
+        session_factory: SessionFactory,
+    ) -> None:
+        with session_factory() as session:
+            users = [
+                UserModel(
+                    email=f"bulk-{index}@example.test",
+                    display_name=f"Bulk {index}",
+                )
+                for index in range(50)
+            ]
+            notification = WorkerFixtures.notification(
+                audience_type=AudienceType.ALL,
+                audience={"type": "all"},
+                channels=(Channel.WEB, Channel.EMAIL),
+            )
+            session.add_all([*users, notification])
+            session.commit()
+            notification_id = notification.id
+
+        statement_count = 0
+
+        def count_statement(*_args: object) -> None:
+            nonlocal statement_count
+            statement_count += 1
+
+        engine = session_factory.kw["bind"]
+        event.listen(engine, "before_cursor_execute", count_statement)
+        try:
+            result = WorkerFixtures.fanout_handler(session_factory).handle(
+                {"notification_id": str(notification_id)}
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", count_statement)
+
+        assert result.recipient_count == 50
+        assert result.delivery_count == 100
+        assert statement_count <= 10
+
 
 class TestDeliveryWorker:
     def test_web_delivery_makes_notification_visible(

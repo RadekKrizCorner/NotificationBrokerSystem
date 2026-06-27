@@ -3,6 +3,8 @@ from typing import cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import Select, and_, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, joinedload
 
 from backend.db.models import (
@@ -34,6 +36,69 @@ class NotificationRepository:
 
     def add_action_invocation(self, invocation: NotificationActionInvocationModel) -> None:
         self._session.add(invocation)
+
+    def add_recipients_ignore_conflicts(
+        self,
+        *,
+        notification_id: UUID,
+        user_ids: list[UUID],
+        created_at: datetime,
+    ) -> None:
+        if not user_ids:
+            return
+        values = [
+            {
+                "id": uuid4(),
+                "notification_id": notification_id,
+                "user_id": user_id,
+                "created_at": created_at,
+            }
+            for user_id in user_ids
+        ]
+        dialect_name = self._session.get_bind().dialect.name
+        if dialect_name == "postgresql":
+            pg_statement = postgresql_insert(NotificationRecipientModel).values(values)
+            self._session.execute(
+                pg_statement.on_conflict_do_nothing(
+                    index_elements=["notification_id", "user_id"],
+                )
+            )
+            return
+        if dialect_name == "sqlite":
+            sqlite_statement = sqlite_insert(NotificationRecipientModel).values(values)
+            self._session.execute(
+                sqlite_statement.on_conflict_do_nothing(
+                    index_elements=["notification_id", "user_id"],
+                )
+            )
+            return
+        raise RuntimeError(f"unsupported database dialect: {dialect_name}")
+
+    def add_deliveries_ignore_conflicts(
+        self,
+        *,
+        values: list[dict[str, object]],
+    ) -> None:
+        if not values:
+            return
+        dialect_name = self._session.get_bind().dialect.name
+        if dialect_name == "postgresql":
+            pg_statement = postgresql_insert(NotificationDeliveryModel).values(values)
+            self._session.execute(
+                pg_statement.on_conflict_do_nothing(
+                    index_elements=["notification_recipient_id", "channel"],
+                )
+            )
+            return
+        if dialect_name == "sqlite":
+            sqlite_statement = sqlite_insert(NotificationDeliveryModel).values(values)
+            self._session.execute(
+                sqlite_statement.on_conflict_do_nothing(
+                    index_elements=["notification_recipient_id", "channel"],
+                )
+            )
+            return
+        raise RuntimeError(f"unsupported database dialect: {dialect_name}")
 
     def get(self, notification_id: UUID) -> NotificationRequestModel | None:
         return self._session.get(NotificationRequestModel, notification_id)

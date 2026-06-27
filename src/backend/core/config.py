@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     jwt_issuer: str = Field(default="notification-center", min_length=1, max_length=128)
     jwt_audience: str = Field(default="notification-center-api", min_length=1, max_length=128)
     jwt_token_ttl_seconds: int = Field(default=300, gt=0, le=3600)
+    metrics_refresh_interval_seconds: float = Field(default=5.0, gt=0, le=300)
     max_request_body_bytes: int = Field(default=65_536, ge=1_024, le=1_048_576)
     fallback_deduplication_window_seconds: int = Field(default=600, gt=0)
     producer_quota_limit: int = Field(default=300, gt=0)

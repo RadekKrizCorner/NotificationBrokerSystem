@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Index, Integer, String, Text
+from sqlalchemy import CheckConstraint, DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -11,6 +11,20 @@ from backend.db.models.base import Base, TimestampMixin, json_document, utc_now
 class OutboxEventModel(TimestampMixin, Base):
     __tablename__ = "outbox_events"
     __table_args__ = (
+        CheckConstraint(
+            "attempts >= 0",
+            name="ck_outbox_events_nonnegative_attempts",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'publishing', 'published', "
+            "'failed_retryable', 'failed_terminal')",
+            name="ck_outbox_events_status",
+        ),
+        Index(
+            "ix_outbox_events_aggregate",
+            "aggregate_type",
+            "aggregate_id",
+        ),
         Index(
             "ix_outbox_events_publisher",
             "status",

@@ -25,6 +25,22 @@ class NotificationRequestModel(TimestampMixin, Base):
     __tablename__ = "notification_requests"
     __table_args__ = (
         CheckConstraint(
+            "recipient_count >= 0 AND delivery_count >= 0",
+            name="ck_notification_requests_nonnegative_counts",
+        ),
+        CheckConstraint(
+            "severity IN ('info', 'warning', 'error', 'critical')",
+            name="ck_notification_requests_severity",
+        ),
+        CheckConstraint(
+            "audience_type IN ('all', 'group', 'labels')",
+            name="ck_notification_requests_audience_type",
+        ),
+        CheckConstraint(
+            "status = 'accepted'",
+            name="ck_notification_requests_status",
+        ),
+        CheckConstraint(
             "idempotency_key IS NOT NULL OR "
             "(deduplication_hash IS NOT NULL AND deduplication_window_start IS NOT NULL)",
             name="ck_notification_requests_deduplication_present",
@@ -94,6 +110,10 @@ class NotificationRecipientModel(Base):
             "user_id",
             name="uq_notification_recipients_notification_user",
         ),
+        Index(
+            "ix_notification_recipients_user_id",
+            "user_id",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -124,6 +144,23 @@ class NotificationRecipientModel(Base):
 class NotificationDeliveryModel(TimestampMixin, Base):
     __tablename__ = "notification_deliveries"
     __table_args__ = (
+        CheckConstraint(
+            "attempt_count >= 0 AND max_attempts > 0 AND attempt_count <= max_attempts",
+            name="ck_notification_deliveries_attempt_bounds",
+        ),
+        CheckConstraint(
+            "channel IN ('web', 'email')",
+            name="ck_notification_deliveries_channel",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'replay_requested', 'delivered', "
+            "'failed_retryable', 'failed_terminal')",
+            name="ck_notification_deliveries_status",
+        ),
+        Index(
+            "ix_notification_deliveries_notification_id",
+            "notification_id",
+        ),
         UniqueConstraint(
             "notification_recipient_id",
             "channel",
@@ -200,6 +237,10 @@ class NotificationDeliveryModel(TimestampMixin, Base):
 class DeliveryAttemptModel(Base):
     __tablename__ = "delivery_attempts"
     __table_args__ = (
+        CheckConstraint(
+            "attempt_number > 0",
+            name="ck_delivery_attempts_positive_attempt_number",
+        ),
         UniqueConstraint(
             "delivery_id",
             "attempt_number",
@@ -231,6 +272,10 @@ class NotificationActionInvocationModel(Base):
             "(result = 'queued' AND replay_id IS NOT NULL) OR "
             "(result = 'no_eligible' AND replay_id IS NULL)",
             name="ck_notification_action_invocations_replay_result",
+        ),
+        Index(
+            "ix_notification_action_invocations_notification_id",
+            "notification_id",
         ),
     )
 

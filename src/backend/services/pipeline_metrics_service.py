@@ -1,5 +1,7 @@
 from collections.abc import Callable
 from datetime import datetime
+from threading import Lock
+from time import monotonic
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -26,21 +28,42 @@ class PipelineMetricsRefresher:
         session_factory: sessionmaker[Session],
         metrics: PrometheusMetrics,
         now: Callable[[], datetime],
+        refresh_interval_seconds: float = 5.0,
+        monotonic_clock: Callable[[], float] = monotonic,
     ) -> None:
         self._session_factory = session_factory
         self._metrics = metrics
         self._now = now
+        self._refresh_interval_seconds = refresh_interval_seconds
+        self._monotonic_clock = monotonic_clock
+        self._refresh_lock = Lock()
+        self._last_refresh_at: float | None = None
 
     def refresh(self) -> None:
-        with self._session_factory() as session:
-            self._refresh_notification_request_counts(session)
-            self._refresh_outbox_event_counts(session)
-            self._refresh_delivery_counts(session)
-            self._metrics.set_outbox_oldest_pending_seconds(
-                OutboxRepository(session).oldest_publishable_event_age_seconds(
-                    now=self._now(),
+        observed_at = self._monotonic_clock()
+        if self._is_fresh(observed_at):
+            return
+
+        with self._refresh_lock:
+            observed_at = self._monotonic_clock()
+            if self._is_fresh(observed_at):
+                return
+            with self._session_factory() as session:
+                self._refresh_notification_request_counts(session)
+                self._refresh_outbox_event_counts(session)
+                self._refresh_delivery_counts(session)
+                self._metrics.set_outbox_oldest_pending_seconds(
+                    OutboxRepository(session).oldest_publishable_event_age_seconds(
+                        now=self._now(),
+                    )
                 )
-            )
+            self._last_refresh_at = observed_at
+
+    def _is_fresh(self, observed_at: float) -> bool:
+        return (
+            self._last_refresh_at is not None
+            and observed_at - self._last_refresh_at < self._refresh_interval_seconds
+        )
 
     def _refresh_notification_request_counts(self, session: Session) -> None:
         counts = self._notification_request_counts(session)

@@ -27,6 +27,7 @@ from backend.domain.enums import (
     OutboxEventStatus,
     Severity,
 )
+from backend.services.pipeline_metrics_service import PipelineMetricsRefresher
 from workers.outbox.publisher import OutboxPublisher
 
 SessionFactory = sessionmaker[Session]
@@ -162,8 +163,7 @@ class TestPrometheusMetrics:
         body = metrics.render().decode("utf-8")
 
         assert (
-            'notification_http_requests_total{method="GET",path="/notifications",status="202"} '
-            "1.0"
+            'notification_http_requests_total{method="GET",path="/notifications",status="202"} 1.0'
         ) in body
         assert "notification_http_request_duration_seconds_bucket" in body
         assert (
@@ -195,8 +195,7 @@ class TestPrometheusMetrics:
         assert metrics_response.status_code == 200
         assert "text/plain" in metrics_response.headers["content-type"]
         assert (
-            'notification_http_requests_total{method="GET",path="/openapi.json",status="200"} '
-            "1.0"
+            'notification_http_requests_total{method="GET",path="/openapi.json",status="200"} 1.0'
         ) in metrics_response.text
 
     def test_api_metrics_endpoint_refreshes_pipeline_status_gauges(self) -> None:
@@ -273,3 +272,32 @@ class TestPrometheusMetrics:
             'status="published"} 1.0'
         ) in body
         assert "notification_outbox_oldest_pending_seconds 300.0" in body
+
+    def test_pipeline_metrics_refresh_is_cached_for_configured_interval(self) -> None:
+        session_factory = MetricsFixtures.session_factory()
+        metrics = PrometheusMetrics()
+        monotonic_time = [0.0]
+        refresher = PipelineMetricsRefresher(
+            session_factory=session_factory,
+            metrics=metrics,
+            now=lambda: MetricsFixtures.now,
+            refresh_interval_seconds=5.0,
+            monotonic_clock=lambda: monotonic_time[0],
+        )
+
+        refresher.refresh()
+        MetricsFixtures.seed_outbox_event(
+            session_factory,
+            created_at=MetricsFixtures.now,
+            next_attempt_at=MetricsFixtures.now,
+        )
+        refresher.refresh()
+
+        cached_body = metrics.render().decode("utf-8")
+        assert 'notification_outbox_events_by_status{status="pending"} 0.0' in cached_body
+
+        monotonic_time[0] = 5.0
+        refresher.refresh()
+
+        refreshed_body = metrics.render().decode("utf-8")
+        assert 'notification_outbox_events_by_status{status="pending"} 1.0' in refreshed_body

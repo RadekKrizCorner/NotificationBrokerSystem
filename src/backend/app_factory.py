@@ -87,6 +87,7 @@ class BackendApplicationFactory:
             session_factory=session_factory,
             metrics=metrics,
             now=now,
+            refresh_interval_seconds=self.settings.metrics_refresh_interval_seconds,
         )
         endpoint = PrometheusMetricsEndpoint(
             metrics=metrics,

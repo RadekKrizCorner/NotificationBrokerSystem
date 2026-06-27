@@ -36,6 +36,19 @@ class TestMigrations:
             }
             assert "ix_notification_deliveries_me" in delivery_indexes
             assert "ix_notification_deliveries_worker" in delivery_indexes
+            assert "ix_notification_deliveries_notification_id" in delivery_indexes
+            delivery_checks = {
+                constraint["name"]
+                for constraint in inspector.get_check_constraints("notification_deliveries")
+            }
+            assert "ck_notification_deliveries_attempt_bounds" in delivery_checks
+            assert "ck_notification_deliveries_channel" in delivery_checks
+            assert "ck_notification_deliveries_status" in delivery_checks
+
+            recipient_indexes = {
+                index["name"] for index in inspector.get_indexes("notification_recipients")
+            }
+            assert "ix_notification_recipients_user_id" in recipient_indexes
             delivery_columns = {
                 column["name"] for column in inspector.get_columns("notification_deliveries")
             }
