@@ -389,6 +389,26 @@ class TestCreateNotificationApi:
             assert session.scalar(select(func.count(NotificationRequestModel.id))) == 1
             assert session.scalar(select(func.count(OutboxEventModel.id))) == 1
 
+    def test_returns_conflict_when_key_is_reused_for_different_payload(
+        self,
+        client: TestClient,
+    ) -> None:
+        headers = {"Authorization": f"Bearer {ApiTestTokens.service()}"}
+        first_payload = NotificationApiFixtures.notification_payload()
+        second_payload = {
+            **first_payload,
+            "message": "A different notification",
+        }
+
+        first = client.post("/notifications", json=first_payload, headers=headers)
+        second = client.post("/notifications", json=second_payload, headers=headers)
+
+        assert first.status_code == 202
+        assert second.status_code == 409
+        assert second.json() == {
+            "detail": "idempotency key is already used for a different payload"
+        }
+
     def test_enforces_per_service_request_quota(self, client: TestClient) -> None:
         assert isinstance(client.app, FastAPI)
         client.app.state.settings.producer_quota_limit = 1

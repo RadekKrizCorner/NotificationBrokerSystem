@@ -17,7 +17,7 @@ from backend.api.schemas.notification_responses import (
 )
 from backend.core.auth import AuthenticatedPrincipal
 from backend.domain.enums import ActionInvocationResult, NotificationCreateResultStatus
-from backend.domain.errors import ProducerQuotaExceeded
+from backend.domain.errors import IdempotencyConflict, ProducerQuotaExceeded
 from backend.services.notification_service import NotificationCreationService
 from backend.services.quota_service import ProducerQuotaService
 from backend.services.retry_service import RetryService
@@ -58,17 +58,23 @@ class NotificationRoutes(ApiRoutes):
                 headers={"Retry-After": str(exc.retry_after_seconds)},
             ) from exc
 
-        result = service.create_notification(
-            source_service=principal.subject,
-            request=request.to_domain(),
-            idempotency_key=request.idempotency_key,
-        )
+        try:
+            result = service.create_notification(
+                source_service=principal.subject,
+                request=request.to_domain(),
+                idempotency_key=request.idempotency_key,
+            )
+        except IdempotencyConflict as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
 
         return CreateNotificationResponse(
             notification_id=result.notification_id,
             status="accepted",
-            recipient_count=0,
-            delivery_count=0,
+            recipient_count=result.recipient_count,
+            delivery_count=result.delivery_count,
             deduplicated=result.status is NotificationCreateResultStatus.EXISTING,
         )
 

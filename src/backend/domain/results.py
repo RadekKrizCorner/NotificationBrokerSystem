@@ -13,6 +13,8 @@ from backend.domain.enums import (
 class NotificationCreateResult:
     notification_id: UUID
     status: NotificationCreateResultStatus
+    recipient_count: int
+    delivery_count: int
 
 
 @dataclass(frozen=True, slots=True)

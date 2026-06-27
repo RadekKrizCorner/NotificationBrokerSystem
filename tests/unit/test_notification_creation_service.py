@@ -16,6 +16,7 @@ from backend.domain.enums import (
     OutboxEventStatus,
     Severity,
 )
+from backend.domain.errors import IdempotencyConflict
 from backend.domain.value_objects import AudienceSelection, NotificationCreationInput
 from backend.services.notification_service import NotificationCreationService
 
@@ -59,9 +60,9 @@ class NotificationCreationServiceFixtures:
         )
 
     @staticmethod
-    def request() -> NotificationCreationInput:
+    def request(message: str = "Billing sync failed") -> NotificationCreationInput:
         return NotificationCreationInput(
-            message="Billing sync failed",
+            message=message,
             severity=Severity.WARNING,
             audience=AudienceSelection(type=AudienceType.LABELS, labels=(("region", "EU"),)),
             channels=(Channel.WEB, Channel.EMAIL),
@@ -165,6 +166,51 @@ class TestNotificationCreationService:
                     0,
                     tzinfo=UTC,
                 )
+
+    def test_rejects_explicit_key_reused_for_different_payload(
+        self,
+        session_factory: SessionFactory,
+    ) -> None:
+        service = NotificationCreationServiceFixtures.service(session_factory)
+        service.create_notification(
+            source_service="billing",
+            request=NotificationCreationServiceFixtures.request("first"),
+            idempotency_key="same-key",
+        )
+
+        with pytest.raises(IdempotencyConflict):
+            service.create_notification(
+                source_service="billing",
+                request=NotificationCreationServiceFixtures.request("second"),
+                idempotency_key="same-key",
+            )
+
+    def test_duplicate_result_contains_persisted_counts(
+        self,
+        session_factory: SessionFactory,
+    ) -> None:
+        service = NotificationCreationServiceFixtures.service(session_factory)
+        first = service.create_notification(
+            source_service="billing",
+            request=NotificationCreationServiceFixtures.request(),
+            idempotency_key="same-key",
+        )
+        with session_factory() as session:
+            notification = session.get(NotificationRequestModel, first.notification_id)
+            assert notification is not None
+            notification.recipient_count = 3
+            notification.delivery_count = 6
+            session.commit()
+
+        duplicate = service.create_notification(
+            source_service="billing",
+            request=NotificationCreationServiceFixtures.request(),
+            idempotency_key="same-key",
+        )
+
+        assert duplicate.status is NotificationCreateResultStatus.EXISTING
+        assert duplicate.recipient_count == 3
+        assert duplicate.delivery_count == 6
 
     def test_creates_new_fallback_row_after_window_changes(
         self,

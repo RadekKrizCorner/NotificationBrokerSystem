@@ -9,3 +9,7 @@ class FanoutLimitExceeded(Exception):
         super().__init__("notification fanout limit exceeded")
         self.recipients = recipients
         self.deliveries = deliveries
+
+
+class IdempotencyConflict(Exception):
+    pass
