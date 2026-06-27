@@ -42,7 +42,7 @@ class UserRoutes(ApiRoutes):
         settings: Annotated[Settings, Depends(get_settings)],
         status: WebNotificationStatus = WebNotificationStatus.ALL,
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
-        cursor: str | None = None,
+        cursor: Annotated[str | None, Query(max_length=2_048)] = None,
     ) -> WebNotificationListResponse:
         principal.require_type("user")
         principal.require_scope("notifications:read")

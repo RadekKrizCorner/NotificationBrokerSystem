@@ -35,6 +35,8 @@ def get_current_principal(
         credentials,
         jwt_secret=settings.jwt_secret,
         jwt_algorithm=settings.jwt_algorithm,
+        jwt_issuer=settings.jwt_issuer,
+        jwt_audience=settings.jwt_audience,
     )
 
 

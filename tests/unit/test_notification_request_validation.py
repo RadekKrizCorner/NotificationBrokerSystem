@@ -36,6 +36,26 @@ class TestCreateNotificationRequestValidation:
         assert request.audience.labels == {"region": "EU", "tier": "enterprise"}
         assert request.idempotency_key == "billing-sync-failed-2026-06-23"
 
+    def test_rejects_too_many_labels(self) -> None:
+        payload = NotificationRequestValidationFixtures.valid_payload()
+        payload["audience"] = {
+            "type": "labels",
+            "labels": {f"label-{index}": "value" for index in range(21)},
+        }
+
+        with pytest.raises(ValidationError):
+            CreateNotificationRequest.model_validate(payload)
+
+    def test_rejects_oversized_group_name(self) -> None:
+        payload = NotificationRequestValidationFixtures.valid_payload()
+        payload["audience"] = {
+            "type": "group",
+            "group": "g" * 129,
+        }
+
+        with pytest.raises(ValidationError):
+            CreateNotificationRequest.model_validate(payload)
+
     @pytest.mark.kwparametrize(
         [
             {

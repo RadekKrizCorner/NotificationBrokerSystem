@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from backend.api.routers.notifications import router as notifications_router
 from backend.api.routers.users import router as users_router
 from backend.core.config import Settings
+from backend.core.http_limits import RequestBodyLimitMiddleware
 from backend.core.metrics import (
     PrometheusHttpMiddleware,
     PrometheusMetrics,
@@ -37,6 +38,10 @@ class BackendApplicationFactory:
 
     def create(self) -> FastAPI:
         app = FastAPI(title="Notification Center")
+        app.add_middleware(
+            RequestBodyLimitMiddleware,
+            max_body_bytes=self.settings.max_request_body_bytes,
+        )
         metrics = self._resolved_metrics()
         session_factory = self._resolved_session_factory()
         now = self._now or self._default_now

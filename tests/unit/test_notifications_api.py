@@ -38,19 +38,29 @@ JWT_SECRET = "test-secret-long-enough-for-hs256"
 class ApiTestTokens:
     @staticmethod
     def service(*, scopes: list[str] | None = None, subject: str = "billing") -> str:
+        issued_at = datetime.now(UTC)
         payload = {
             "sub": subject,
             "type": "service",
             "scopes": scopes or ["notifications:write"],
+            "iat": issued_at,
+            "exp": issued_at + timedelta(minutes=5),
+            "iss": "notification-center",
+            "aud": "notification-center-api",
         }
         return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
     @staticmethod
     def user(subject: str = "user-1", *, scopes: list[str] | None = None) -> str:
+        issued_at = datetime.now(UTC)
         payload = {
             "sub": subject,
             "type": "user",
             "scopes": scopes if scopes is not None else ["notifications:read"],
+            "iat": issued_at,
+            "exp": issued_at + timedelta(minutes=5),
+            "iss": "notification-center",
+            "aud": "notification-center-api",
         }
         return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
@@ -293,6 +303,39 @@ def client(session_factory: SessionFactory) -> TestClient:
 
 
 class TestCreateNotificationApi:
+    def test_rejects_token_missing_registered_claims(self, client: TestClient) -> None:
+        token = jwt.encode(
+            {
+                "sub": "billing",
+                "type": "service",
+                "scopes": ["notifications:write"],
+            },
+            JWT_SECRET,
+            algorithm="HS256",
+        )
+
+        response = client.post(
+            "/notifications",
+            json=NotificationApiFixtures.notification_payload(),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 401
+
+    def test_rejects_request_body_over_limit(self, client: TestClient) -> None:
+        token = ApiTestTokens.service()
+
+        response = client.post(
+            "/notifications",
+            content=b'{"message":"' + (b"x" * 70_000) + b'"}',
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+        )
+
+        assert response.status_code == 413
+
     def test_accepts_service_notification(
         self,
         client: TestClient,

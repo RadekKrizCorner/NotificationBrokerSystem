@@ -31,6 +31,8 @@ def decode_bearer_token(
     *,
     jwt_secret: str,
     jwt_algorithm: str,
+    jwt_issuer: str,
+    jwt_audience: str,
 ) -> AuthenticatedPrincipal:
     if credentials is None:
         raise HTTPException(
@@ -43,7 +45,11 @@ def decode_bearer_token(
             credentials.credentials,
             jwt_secret,
             algorithms=[jwt_algorithm],
-            options={"require": ["sub", "type"]},
+            issuer=jwt_issuer,
+            audience=jwt_audience,
+            options={
+                "require": ["sub", "type", "exp", "iat", "iss", "aud"],
+            },
         )
     except jwt.PyJWTError as exc:
         raise HTTPException(
@@ -59,11 +65,18 @@ def _principal_from_payload(payload: dict[str, Any]) -> AuthenticatedPrincipal:
     token_type = payload.get("type")
     scopes = payload.get("scopes", [])
 
-    if not isinstance(subject, str) or not subject:
+    if not isinstance(subject, str) or not subject or len(subject) > 256:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid subject")
     if token_type not in {"service", "user"}:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token type")
-    if not isinstance(scopes, list) or any(not isinstance(scope, str) for scope in scopes):
+    if (
+        not isinstance(scopes, list)
+        or len(scopes) > 32
+        or any(
+            not isinstance(scope, str) or not scope or len(scope) > 128
+            for scope in scopes
+        )
+    ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid scopes")
 
     return AuthenticatedPrincipal(

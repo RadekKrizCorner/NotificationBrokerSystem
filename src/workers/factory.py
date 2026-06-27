@@ -288,6 +288,9 @@ class WorkloadGeneratorFactory:
                 source_service=self.settings.workload_source_service,
                 jwt_secret=self.settings.jwt_secret,
                 jwt_algorithm=self.settings.jwt_algorithm,
+                jwt_issuer=self.settings.jwt_issuer,
+                jwt_audience=self.settings.jwt_audience,
+                token_ttl_seconds=self.settings.jwt_token_ttl_seconds,
             ),
         )
 

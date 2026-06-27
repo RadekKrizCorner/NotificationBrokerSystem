@@ -1,4 +1,6 @@
-from pydantic import Field
+from typing import ClassVar, Literal, Self
+
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,9 +16,16 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="NOTIFICATION_CENTER_", extra="ignore")
 
+    demo_jwt_secret: ClassVar[str] = "change-me-local-secret-please-change"
+
+    runtime_mode: Literal["local", "production", "test"] = "local"
     database_url: str = "postgresql+psycopg://notification:notification@localhost:5432/notification_center"
-    jwt_secret: str = Field(default="change-me-local-secret-please-change", min_length=16)
-    jwt_algorithm: str = "HS256"
+    jwt_secret: str = Field(default=demo_jwt_secret, min_length=16)
+    jwt_algorithm: Literal["HS256"] = "HS256"
+    jwt_issuer: str = Field(default="notification-center", min_length=1, max_length=128)
+    jwt_audience: str = Field(default="notification-center-api", min_length=1, max_length=128)
+    jwt_token_ttl_seconds: int = Field(default=300, gt=0, le=3600)
+    max_request_body_bytes: int = Field(default=65_536, ge=1_024, le=1_048_576)
     fallback_deduplication_window_seconds: int = Field(default=600, gt=0)
     api_host: str = "0.0.0.0"
     api_port: int = Field(default=8000, gt=0, le=65535)
@@ -52,6 +61,14 @@ class Settings(BaseSettings):
     smtp_port: int = Field(default=1025, gt=0, le=65535)
     smtp_from_address: str = "notifications@example.test"
     smtp_timeout_seconds: float = Field(default=10.0, gt=0)
+
+    @model_validator(mode="after")
+    def reject_insecure_production_defaults(self) -> Self:
+        if self.runtime_mode == "production" and self.jwt_secret == self.demo_jwt_secret:
+            raise ValueError(
+                "production requires a non-demo JWT secret"
+            )
+        return self
 
     @property
     def workload_interval_seconds(self) -> float:
