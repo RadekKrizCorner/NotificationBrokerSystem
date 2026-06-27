@@ -35,7 +35,17 @@ def upgrade() -> None:
             "window_start",
         ),
     )
+    op.add_column(
+        "notification_deliveries",
+        sa.Column("claim_token", sa.Uuid(), nullable=True),
+    )
+    op.add_column(
+        "outbox_events",
+        sa.Column("claim_token", sa.Uuid(), nullable=True),
+    )
 
 
 def downgrade() -> None:
+    op.drop_column("outbox_events", "claim_token")
+    op.drop_column("notification_deliveries", "claim_token")
     op.drop_table("producer_quotas")

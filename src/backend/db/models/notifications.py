@@ -180,6 +180,7 @@ class NotificationDeliveryModel(TimestampMixin, Base):
     processing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     claimed_by: Mapped[str | None] = mapped_column(Text)
+    claim_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     replay_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

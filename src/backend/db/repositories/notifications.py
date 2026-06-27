@@ -1,9 +1,9 @@
 from datetime import datetime
 from typing import cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import Select, and_, or_, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from backend.db.models import (
     DeliveryAttemptModel,
@@ -129,8 +129,7 @@ class NotificationRepository:
             update(NotificationDeliveryModel)
             .where(
                 NotificationDeliveryModel.id.in_(delivery_ids),
-                NotificationDeliveryModel.status
-                == DeliveryStatus.FAILED_RETRYABLE.value,
+                NotificationDeliveryModel.status == DeliveryStatus.FAILED_RETRYABLE.value,
             )
             .values(
                 status=DeliveryStatus.REPLAY_REQUESTED.value,
@@ -140,6 +139,7 @@ class NotificationRepository:
                 lease_expires_at=None,
                 claimed_by=None,
                 updated_at=requested_at,
+                claim_token=None,
             )
             .returning(NotificationDeliveryModel.id)
             .execution_options(synchronize_session=False)
@@ -175,9 +175,7 @@ class NotificationRepository:
         predicates = [or_(ready_to_process, expired_processing_lease)]
         if channels is not None:
             predicates.append(
-                NotificationDeliveryModel.channel.in_(
-                    [channel.value for channel in channels]
-                )
+                NotificationDeliveryModel.channel.in_([channel.value for channel in channels])
             )
 
         statement = (
@@ -193,8 +191,46 @@ class NotificationRepository:
             delivery.processing_started_at = now
             delivery.lease_expires_at = lease_expires_at
             delivery.claimed_by = worker_id
+            delivery.claim_token = uuid4()
             delivery.updated_at = now
         return deliveries
+
+    def get_claimed_delivery_context(
+        self,
+        *,
+        delivery_id: UUID,
+        claim_token: UUID,
+    ) -> NotificationDeliveryModel | None:
+        statement = (
+            select(NotificationDeliveryModel)
+            .options(
+                joinedload(NotificationDeliveryModel.notification),
+                joinedload(NotificationDeliveryModel.user),
+            )
+            .where(
+                NotificationDeliveryModel.id == delivery_id,
+                NotificationDeliveryModel.status == DeliveryStatus.PROCESSING.value,
+                NotificationDeliveryModel.claim_token == claim_token,
+            )
+        )
+        return self._session.scalar(statement)
+
+    def get_claimed_delivery_for_update(
+        self,
+        *,
+        delivery_id: UUID,
+        claim_token: UUID,
+    ) -> NotificationDeliveryModel | None:
+        statement = (
+            select(NotificationDeliveryModel)
+            .where(
+                NotificationDeliveryModel.id == delivery_id,
+                NotificationDeliveryModel.status == DeliveryStatus.PROCESSING.value,
+                NotificationDeliveryModel.claim_token == claim_token,
+            )
+            .with_for_update()
+        )
+        return self._session.scalar(statement)
 
     def get_visible_web_delivery_for_user(
         self,

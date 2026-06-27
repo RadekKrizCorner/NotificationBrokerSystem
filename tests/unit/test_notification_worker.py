@@ -74,6 +74,17 @@ class FakeDeliveryAdapter:
         return self.outcome
 
 
+class RaisingDeliveryAdapter:
+    def deliver(
+        self,
+        *,
+        delivery: NotificationDeliveryModel,
+        notification: NotificationRequestModel,
+        user: UserModel,
+    ) -> DeliveryOutcome:
+        raise RuntimeError("provider secret must not leak: " + ("x" * 2_000))
+
+
 class WorkerFixtures:
     now = datetime(2026, 6, 24, 12, 0, tzinfo=UTC)
 
@@ -251,6 +262,7 @@ class TestDeliveryWorker:
             assert delivery.delivered_at == WorkerFixtures.now.replace(tzinfo=None)
             assert delivery.attempt_count == 1
             assert delivery.claimed_by is None
+            assert delivery.claim_token is None
             assert delivery.lease_expires_at is None
             assert attempt is not None
             assert attempt.status == DeliveryStatus.DELIVERED.value
@@ -382,12 +394,8 @@ class TestDeliveryWorker:
             channel=Channel.EMAIL,
             user_email="email-worker-user@example.test",
         )
-        web_adapter = FakeDeliveryAdapter(
-            DeliveryOutcome(status=DeliveryOutcomeStatus.DELIVERED)
-        )
-        email_adapter = FakeDeliveryAdapter(
-            DeliveryOutcome(status=DeliveryOutcomeStatus.DELIVERED)
-        )
+        web_adapter = FakeDeliveryAdapter(DeliveryOutcome(status=DeliveryOutcomeStatus.DELIVERED))
+        email_adapter = FakeDeliveryAdapter(DeliveryOutcome(status=DeliveryOutcomeStatus.DELIVERED))
         worker = WorkerFixtures.delivery_worker(
             session_factory,
             adapters={
@@ -486,3 +494,40 @@ class TestDeliveryWorker:
             assert delivery.last_error_code == "missing_adapter"
             assert attempt is not None
             assert attempt.status == DeliveryStatus.FAILED_TERMINAL.value
+
+    def test_worker_isolates_unexpected_adapter_errors(
+        self,
+        session_factory: SessionFactory,
+    ) -> None:
+        failed_id = WorkerFixtures.seed_delivery(
+            session_factory,
+            channel=Channel.EMAIL,
+            user_email="failed@example.test",
+        )
+        delivered_id = WorkerFixtures.seed_delivery(
+            session_factory,
+            channel=Channel.WEB,
+            user_email="delivered@example.test",
+        )
+        worker = WorkerFixtures.delivery_worker(
+            session_factory,
+            adapters={
+                Channel.EMAIL: RaisingDeliveryAdapter(),
+                Channel.WEB: WebDeliveryAdapter(),
+            },
+        )
+
+        result = worker.process_due_deliveries(limit=10)
+
+        assert result.claimed_count == 2
+        assert result.processed_count == 2
+        with session_factory() as session:
+            failed = session.get(NotificationDeliveryModel, failed_id)
+            delivered = session.get(NotificationDeliveryModel, delivered_id)
+            assert failed is not None
+            assert failed.status == DeliveryStatus.FAILED_RETRYABLE.value
+            assert failed.last_error_code == "adapter_exception"
+            assert failed.last_error_message == "delivery adapter raised RuntimeError"
+            assert failed.claim_token is None
+            assert delivered is not None
+            assert delivered.status == DeliveryStatus.DELIVERED.value

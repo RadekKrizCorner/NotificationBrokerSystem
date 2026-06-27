@@ -36,8 +36,14 @@ class TestMigrations:
             }
             assert "ix_notification_deliveries_me" in delivery_indexes
             assert "ix_notification_deliveries_worker" in delivery_indexes
+            delivery_columns = {
+                column["name"] for column in inspector.get_columns("notification_deliveries")
+            }
+            assert "claim_token" in delivery_columns
 
             outbox_indexes = {index["name"] for index in inspector.get_indexes("outbox_events")}
             assert "ix_outbox_events_publisher" in outbox_indexes
+            outbox_columns = {column["name"] for column in inspector.get_columns("outbox_events")}
+            assert "claim_token" in outbox_columns
         finally:
             engine.dispose()
