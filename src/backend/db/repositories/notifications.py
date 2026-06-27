@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import Select, and_, or_, select
+from sqlalchemy import Select, and_, or_, select, update
 from sqlalchemy.orm import Session
 
 from backend.db.models import (
@@ -112,6 +112,37 @@ class NotificationRepository:
             select(NotificationDeliveryModel)
             .where(same_notification, retryable_failure)
             .order_by(NotificationDeliveryModel.id)
+        )
+        return list(self._session.scalars(statement))
+
+    def mark_deliveries_replay_requested(
+        self,
+        *,
+        delivery_ids: list[UUID],
+        replay_id: UUID,
+        requested_at: datetime,
+    ) -> list[UUID]:
+        if not delivery_ids:
+            return []
+
+        statement = (
+            update(NotificationDeliveryModel)
+            .where(
+                NotificationDeliveryModel.id.in_(delivery_ids),
+                NotificationDeliveryModel.status
+                == DeliveryStatus.FAILED_RETRYABLE.value,
+            )
+            .values(
+                status=DeliveryStatus.REPLAY_REQUESTED.value,
+                replay_id=replay_id,
+                next_attempt_at=requested_at,
+                processing_started_at=None,
+                lease_expires_at=None,
+                claimed_by=None,
+                updated_at=requested_at,
+            )
+            .returning(NotificationDeliveryModel.id)
+            .execution_options(synchronize_session=False)
         )
         return list(self._session.scalars(statement))
 

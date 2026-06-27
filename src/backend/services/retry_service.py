@@ -13,7 +13,6 @@ from backend.db.unit_of_work import SqlAlchemyUnitOfWork
 from backend.domain.enums import (
     ActionInvocationResult,
     ActionType,
-    DeliveryStatus,
     OutboxEventStatus,
     RequestedByType,
 )
@@ -124,21 +123,6 @@ class RetryService:
             raise ValueError("now must be timezone-aware")
         return now.astimezone(UTC)
 
-    def _mark_delivery_replay_requested(
-        self,
-        delivery: NotificationDeliveryModel,
-        *,
-        replay_id: UUID,
-        requested_at: datetime,
-    ) -> None:
-        delivery.status = DeliveryStatus.REPLAY_REQUESTED.value
-        delivery.replay_id = replay_id
-        delivery.next_attempt_at = requested_at
-        delivery.processing_started_at = None
-        delivery.lease_expires_at = None
-        delivery.claimed_by = None
-        delivery.updated_at = requested_at
-
     def _record_retry(
         self,
         uow: SqlAlchemyUnitOfWork,
@@ -150,24 +134,28 @@ class RetryService:
         requested_at: datetime,
         web_delivery_id: UUID | None = None,
     ) -> RetryResult:
-        replay_id = uuid4() if eligible_deliveries else None
+        candidate_replay_id = uuid4() if eligible_deliveries else None
+        replayed_delivery_ids = (
+            uow.notifications.mark_deliveries_replay_requested(
+                delivery_ids=[delivery.id for delivery in eligible_deliveries],
+                replay_id=candidate_replay_id,
+                requested_at=requested_at,
+            )
+            if candidate_replay_id is not None
+            else []
+        )
+        replay_id = candidate_replay_id if replayed_delivery_ids else None
         result = (
             ActionInvocationResult.QUEUED
-            if eligible_deliveries
+            if replayed_delivery_ids
             else ActionInvocationResult.NO_ELIGIBLE
         )
 
         if replay_id is not None:
-            for delivery in eligible_deliveries:
-                self._mark_delivery_replay_requested(
-                    delivery,
-                    replay_id=replay_id,
-                    requested_at=requested_at,
-                )
             uow.outbox.add(
                 self._replay_requested_event(
                     notification,
-                    deliveries=eligible_deliveries,
+                    delivery_ids=replayed_delivery_ids,
                     replay_id=replay_id,
                     requested_at=requested_at,
                 )
@@ -182,7 +170,7 @@ class RetryService:
                 action_type=ActionType.RETRY.value,
                 result=result.value,
                 replay_id=replay_id,
-                replayed_delivery_count=len(eligible_deliveries),
+                replayed_delivery_count=len(replayed_delivery_ids),
                 created_at=requested_at,
             )
         )
@@ -192,7 +180,7 @@ class RetryService:
             notification_id=notification.id,
             status=result,
             replay_id=replay_id,
-            replayed_delivery_count=len(eligible_deliveries),
+            replayed_delivery_count=len(replayed_delivery_ids),
             requested_at=requested_at,
         )
 
@@ -200,7 +188,7 @@ class RetryService:
         self,
         notification: NotificationRequestModel,
         *,
-        deliveries: list[NotificationDeliveryModel],
+        delivery_ids: list[UUID],
         replay_id: UUID,
         requested_at: datetime,
     ) -> OutboxEventModel:
@@ -211,7 +199,7 @@ class RetryService:
             aggregate_id=notification.id,
             event_key=str(replay_id),
             payload={
-                "delivery_ids": [str(delivery.id) for delivery in deliveries],
+                "delivery_ids": [str(delivery_id) for delivery_id in delivery_ids],
                 "notification_id": str(notification.id),
                 "replay_id": str(replay_id),
             },
