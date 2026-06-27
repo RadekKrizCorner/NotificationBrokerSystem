@@ -33,7 +33,7 @@ class TestContainerConfig:
         assert "email-delivery-worker:" in compose_file
         assert "  delivery-worker:" not in compose_file
         assert "workload-generator:" in compose_file
-        assert '127.0.0.1:8000:8000' in compose_file
+        assert "127.0.0.1:8000:8000" in compose_file
         assert "/health/ready" in compose_file
         assert "restart: unless-stopped" in compose_file
         assert 'command: ["python", "-m", "backend.runtime", "workload-generator"]' in compose_file

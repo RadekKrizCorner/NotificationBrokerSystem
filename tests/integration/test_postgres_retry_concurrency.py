@@ -133,6 +133,4 @@ class TestPostgresRetryConcurrency:
             assert persisted_delivery is not None
             assert persisted_delivery.status == DeliveryStatus.REPLAY_REQUESTED.value
             assert session.scalar(select(func.count(OutboxEventModel.id))) == 1
-            assert session.scalar(
-                select(func.count(NotificationActionInvocationModel.id))
-            ) == 2
+            assert session.scalar(select(func.count(NotificationActionInvocationModel.id))) == 2

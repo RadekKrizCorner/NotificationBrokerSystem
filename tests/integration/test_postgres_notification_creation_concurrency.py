@@ -97,12 +97,8 @@ class TestPostgresNotificationCreationConcurrency:
             NotificationCreateResultStatus.EXISTING,
         ]
         with postgres_session_factory() as session:
-            assert session.scalar(
-                select(func.count(NotificationRequestModel.id))
-            ) == 1
-            assert session.scalar(
-                select(func.count(OutboxEventModel.id))
-            ) == 1
+            assert session.scalar(select(func.count(NotificationRequestModel.id))) == 1
+            assert session.scalar(select(func.count(OutboxEventModel.id))) == 1
 
     def test_different_concurrent_payload_returns_one_conflict(
         self,
@@ -149,7 +145,5 @@ class TestPostgresNotificationCreationConcurrency:
         assert len(errors) == 1
         assert isinstance(errors[0], IdempotencyConflict)
         with postgres_session_factory() as session:
-            assert session.scalar(
-                select(func.count(NotificationRequestModel.id))
-            ) == 1
+            assert session.scalar(select(func.count(NotificationRequestModel.id))) == 1
             assert session.scalar(select(func.count(OutboxEventModel.id))) == 1

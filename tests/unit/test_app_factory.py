@@ -47,6 +47,7 @@ class TestBackendApplicationFactory:
         factory = BackendApplicationFactory.from_env()
 
         assert isinstance(factory.settings, Settings)
+
     def test_health_endpoints_report_liveness_and_database_readiness(self) -> None:
         engine = create_engine(
             "sqlite+pysqlite:///:memory:",

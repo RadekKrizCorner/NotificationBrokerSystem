@@ -203,10 +203,7 @@ class TestRetryService:
             assert outbox_event.payload["notification_id"] == str(notification_id)
             assert outbox_event.payload["replay_id"] == str(result.replay_id)
             payload_delivery_ids = cast(list[str], outbox_event.payload["delivery_ids"])
-            assert set(payload_delivery_ids) == {
-                str(delivery.id)
-                for delivery in replayed
-            }
+            assert set(payload_delivery_ids) == {str(delivery.id) for delivery in replayed}
 
     def test_records_no_eligible_without_outbox_event(
         self,
