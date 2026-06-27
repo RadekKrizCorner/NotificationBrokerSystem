@@ -41,6 +41,7 @@ class TestContainerConfig:
     def test_compose_tunes_local_delivery_and_workload_rates(self) -> None:
         compose_file = (ContainerConfigFixtures.root / "docker-compose.yml").read_text()
 
+        assert "postgres-data:/var/lib/postgresql" in compose_file
         assert "NOTIFICATION_CENTER_DEMO_SEED_USER_COUNT: 5000" in compose_file
         assert "NOTIFICATION_CENTER_DELIVERY_BATCH_SIZE: 500" in compose_file
         assert "NOTIFICATION_CENTER_DELIVERY_POLL_INTERVAL_SECONDS: 0.2" in compose_file
