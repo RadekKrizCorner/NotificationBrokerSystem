@@ -28,6 +28,7 @@ class TestMigrations:
                 "notification_action_invocations",
                 "outbox_events",
                 "processed_events",
+                "producer_quotas",
             }.issubset(set(inspector.get_table_names()))
 
             delivery_indexes = {

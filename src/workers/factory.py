@@ -229,6 +229,8 @@ class NotificationConsumerWorkerFactory:
         fanout_service = NotificationFanoutService(
             unit_of_work_factory=lambda: SqlAlchemyUnitOfWork(session_factory),
             now=now,
+            max_recipients=self.settings.fanout_max_recipients,
+            max_deliveries=self.settings.fanout_max_deliveries,
         )
         return NotificationConsumerWorker(
             event_consumer=self._resolved_event_consumer(),

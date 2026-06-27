@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import jwt
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -387,6 +388,31 @@ class TestCreateNotificationApi:
         with session_factory() as session:
             assert session.scalar(select(func.count(NotificationRequestModel.id))) == 1
             assert session.scalar(select(func.count(OutboxEventModel.id))) == 1
+
+    def test_enforces_per_service_request_quota(self, client: TestClient) -> None:
+        assert isinstance(client.app, FastAPI)
+        client.app.state.settings.producer_quota_limit = 1
+        headers = {"Authorization": f"Bearer {ApiTestTokens.service()}"}
+        first_payload = NotificationApiFixtures.notification_payload()
+        second_payload = {
+            **first_payload,
+            "idempotency_key": "billing-sync-2",
+        }
+
+        first = client.post(
+            "/notifications",
+            json=first_payload,
+            headers=headers,
+        )
+        second = client.post(
+            "/notifications",
+            json=second_payload,
+            headers=headers,
+        )
+
+        assert first.status_code == 202
+        assert second.status_code == 429
+        assert int(second.headers["Retry-After"]) > 0
 
     @pytest.mark.kwparametrize(
         [

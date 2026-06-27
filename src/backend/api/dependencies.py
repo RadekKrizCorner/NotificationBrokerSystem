@@ -9,6 +9,7 @@ from backend.core.auth import AuthenticatedPrincipal, decode_bearer_token
 from backend.core.config import Settings
 from backend.db.unit_of_work import SqlAlchemyUnitOfWork
 from backend.services.notification_service import NotificationCreationService
+from backend.services.quota_service import ProducerQuotaService
 from backend.services.retry_service import RetryService
 from backend.services.web_notification_service import WebNotificationService
 
@@ -54,6 +55,22 @@ def get_notification_creation_service(
         fallback_deduplication_window=timedelta(
             seconds=settings.fallback_deduplication_window_seconds,
         ),
+    )
+
+
+def get_producer_quota_service(
+    unit_of_work_factory: Annotated[
+        Callable[[], SqlAlchemyUnitOfWork],
+        Depends(get_unit_of_work_factory),
+    ],
+    now: Annotated[Callable[[], datetime], Depends(get_now)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ProducerQuotaService:
+    return ProducerQuotaService(
+        unit_of_work_factory=unit_of_work_factory,
+        now=now,
+        limit=settings.producer_quota_limit,
+        window=timedelta(seconds=settings.producer_quota_window_seconds),
     )
 
 

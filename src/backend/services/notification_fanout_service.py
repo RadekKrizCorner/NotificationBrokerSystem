@@ -10,6 +10,7 @@ from backend.db.models import (
 )
 from backend.db.unit_of_work import SqlAlchemyUnitOfWork
 from backend.domain.enums import AudienceType, Channel, DeliveryStatus
+from backend.domain.errors import FanoutLimitExceeded
 from backend.domain.results import NotificationFanoutResult
 from backend.domain.value_objects import AudienceSelection
 from backend.services.audience_service import AudienceResolutionService
@@ -23,9 +24,13 @@ class NotificationFanoutService:
         *,
         unit_of_work_factory: UnitOfWorkFactory,
         now: Callable[[], datetime],
+        max_recipients: int = 10_000,
+        max_deliveries: int = 20_000,
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
         self._now = now
+        self._max_recipients = max_recipients
+        self._max_deliveries = max_deliveries
 
     def fanout_notification(self, notification_id: UUID) -> NotificationFanoutResult:
         next_attempt_at = self._aware_utc_now()
@@ -41,6 +46,15 @@ class NotificationFanoutService:
             delivery_pairs = uow.notifications.list_delivery_pairs(notification.id)
             channels = tuple(Channel(channel) for channel in notification.channels)
 
+            requested_delivery_count = len(user_ids) * len(channels)
+            if (
+                len(user_ids) > self._max_recipients
+                or requested_delivery_count > self._max_deliveries
+            ):
+                raise FanoutLimitExceeded(
+                    recipients=len(user_ids),
+                    deliveries=requested_delivery_count,
+                )
             for user_id in user_ids:
                 if user_id not in recipient_ids_by_user:
                     recipient = NotificationRecipientModel(

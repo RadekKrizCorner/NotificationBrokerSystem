@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     jwt_token_ttl_seconds: int = Field(default=300, gt=0, le=3600)
     max_request_body_bytes: int = Field(default=65_536, ge=1_024, le=1_048_576)
     fallback_deduplication_window_seconds: int = Field(default=600, gt=0)
+    producer_quota_limit: int = Field(default=300, gt=0)
+    producer_quota_window_seconds: int = Field(default=60, gt=0)
+    fanout_max_recipients: int = Field(default=10_000, gt=0)
+    fanout_max_deliveries: int = Field(default=20_000, gt=0)
     api_host: str = "0.0.0.0"
     api_port: int = Field(default=8000, gt=0, le=65535)
     kafka_bootstrap_servers: str = "localhost:9092"

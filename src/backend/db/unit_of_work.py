@@ -6,6 +6,7 @@ from backend.db.repositories import (
     NotificationRepository,
     OutboxRepository,
     ProcessedEventRepository,
+    ProducerQuotaRepository,
     UserRepository,
 )
 
@@ -17,6 +18,7 @@ class SqlAlchemyUnitOfWork:
         self.notifications: NotificationRepository
         self.outbox: OutboxRepository
         self.processed_events: ProcessedEventRepository
+        self.producer_quotas: ProducerQuotaRepository
         self.users: UserRepository
 
     def __enter__(self) -> SqlAlchemyUnitOfWork:
@@ -24,6 +26,7 @@ class SqlAlchemyUnitOfWork:
         self.notifications = NotificationRepository(self.session)
         self.outbox = OutboxRepository(self.session)
         self.processed_events = ProcessedEventRepository(self.session)
+        self.producer_quotas = ProducerQuotaRepository(self.session)
         self.users = UserRepository(self.session)
         return self
 

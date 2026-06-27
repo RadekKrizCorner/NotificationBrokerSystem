@@ -6,6 +6,7 @@ from fastapi import Depends, HTTPException, Response, status
 from backend.api.dependencies import (
     get_current_principal,
     get_notification_creation_service,
+    get_producer_quota_service,
     get_retry_service,
 )
 from backend.api.routing import ApiRoutes, route
@@ -16,7 +17,9 @@ from backend.api.schemas.notification_responses import (
 )
 from backend.core.auth import AuthenticatedPrincipal
 from backend.domain.enums import ActionInvocationResult, NotificationCreateResultStatus
+from backend.domain.errors import ProducerQuotaExceeded
 from backend.services.notification_service import NotificationCreationService
+from backend.services.quota_service import ProducerQuotaService
 from backend.services.retry_service import RetryService
 
 
@@ -38,9 +41,22 @@ class NotificationRoutes(ApiRoutes):
             NotificationCreationService,
             Depends(get_notification_creation_service),
         ],
+        quota_service: Annotated[
+            ProducerQuotaService,
+            Depends(get_producer_quota_service),
+        ],
     ) -> CreateNotificationResponse:
         principal.require_type("service")
         principal.require_scope("notifications:write")
+
+        try:
+            quota_service.consume(source_service=principal.subject)
+        except ProducerQuotaExceeded as exc:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="producer request quota exceeded",
+                headers={"Retry-After": str(exc.retry_after_seconds)},
+            ) from exc
 
         result = service.create_notification(
             source_service=principal.subject,
