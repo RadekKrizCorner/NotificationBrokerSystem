@@ -1,9 +1,11 @@
 from datetime import datetime
 from typing import cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import Select, and_, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import Select, and_, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.orm import Session, joinedload
 
 from backend.db.models import (
     DeliveryAttemptModel,
@@ -34,6 +36,69 @@ class NotificationRepository:
 
     def add_action_invocation(self, invocation: NotificationActionInvocationModel) -> None:
         self._session.add(invocation)
+
+    def add_recipients_ignore_conflicts(
+        self,
+        *,
+        notification_id: UUID,
+        user_ids: list[UUID],
+        created_at: datetime,
+    ) -> None:
+        if not user_ids:
+            return
+        values = [
+            {
+                "id": uuid4(),
+                "notification_id": notification_id,
+                "user_id": user_id,
+                "created_at": created_at,
+            }
+            for user_id in user_ids
+        ]
+        dialect_name = self._session.get_bind().dialect.name
+        if dialect_name == "postgresql":
+            pg_statement = postgresql_insert(NotificationRecipientModel).values(values)
+            self._session.execute(
+                pg_statement.on_conflict_do_nothing(
+                    index_elements=["notification_id", "user_id"],
+                )
+            )
+            return
+        if dialect_name == "sqlite":
+            sqlite_statement = sqlite_insert(NotificationRecipientModel).values(values)
+            self._session.execute(
+                sqlite_statement.on_conflict_do_nothing(
+                    index_elements=["notification_id", "user_id"],
+                )
+            )
+            return
+        raise RuntimeError(f"unsupported database dialect: {dialect_name}")
+
+    def add_deliveries_ignore_conflicts(
+        self,
+        *,
+        values: list[dict[str, object]],
+    ) -> None:
+        if not values:
+            return
+        dialect_name = self._session.get_bind().dialect.name
+        if dialect_name == "postgresql":
+            pg_statement = postgresql_insert(NotificationDeliveryModel).values(values)
+            self._session.execute(
+                pg_statement.on_conflict_do_nothing(
+                    index_elements=["notification_recipient_id", "channel"],
+                )
+            )
+            return
+        if dialect_name == "sqlite":
+            sqlite_statement = sqlite_insert(NotificationDeliveryModel).values(values)
+            self._session.execute(
+                sqlite_statement.on_conflict_do_nothing(
+                    index_elements=["notification_recipient_id", "channel"],
+                )
+            )
+            return
+        raise RuntimeError(f"unsupported database dialect: {dialect_name}")
 
     def get(self, notification_id: UUID) -> NotificationRequestModel | None:
         return self._session.get(NotificationRequestModel, notification_id)
@@ -115,6 +180,37 @@ class NotificationRepository:
         )
         return list(self._session.scalars(statement))
 
+    def mark_deliveries_replay_requested(
+        self,
+        *,
+        delivery_ids: list[UUID],
+        replay_id: UUID,
+        requested_at: datetime,
+    ) -> list[UUID]:
+        if not delivery_ids:
+            return []
+
+        statement = (
+            update(NotificationDeliveryModel)
+            .where(
+                NotificationDeliveryModel.id.in_(delivery_ids),
+                NotificationDeliveryModel.status == DeliveryStatus.FAILED_RETRYABLE.value,
+            )
+            .values(
+                status=DeliveryStatus.REPLAY_REQUESTED.value,
+                replay_id=replay_id,
+                next_attempt_at=requested_at,
+                processing_started_at=None,
+                lease_expires_at=None,
+                claimed_by=None,
+                updated_at=requested_at,
+                claim_token=None,
+            )
+            .returning(NotificationDeliveryModel.id)
+            .execution_options(synchronize_session=False)
+        )
+        return list(self._session.scalars(statement))
+
     def claim_due_deliveries(
         self,
         *,
@@ -144,9 +240,7 @@ class NotificationRepository:
         predicates = [or_(ready_to_process, expired_processing_lease)]
         if channels is not None:
             predicates.append(
-                NotificationDeliveryModel.channel.in_(
-                    [channel.value for channel in channels]
-                )
+                NotificationDeliveryModel.channel.in_([channel.value for channel in channels])
             )
 
         statement = (
@@ -162,8 +256,46 @@ class NotificationRepository:
             delivery.processing_started_at = now
             delivery.lease_expires_at = lease_expires_at
             delivery.claimed_by = worker_id
+            delivery.claim_token = uuid4()
             delivery.updated_at = now
         return deliveries
+
+    def get_claimed_delivery_context(
+        self,
+        *,
+        delivery_id: UUID,
+        claim_token: UUID,
+    ) -> NotificationDeliveryModel | None:
+        statement = (
+            select(NotificationDeliveryModel)
+            .options(
+                joinedload(NotificationDeliveryModel.notification),
+                joinedload(NotificationDeliveryModel.user),
+            )
+            .where(
+                NotificationDeliveryModel.id == delivery_id,
+                NotificationDeliveryModel.status == DeliveryStatus.PROCESSING.value,
+                NotificationDeliveryModel.claim_token == claim_token,
+            )
+        )
+        return self._session.scalar(statement)
+
+    def get_claimed_delivery_for_update(
+        self,
+        *,
+        delivery_id: UUID,
+        claim_token: UUID,
+    ) -> NotificationDeliveryModel | None:
+        statement = (
+            select(NotificationDeliveryModel)
+            .where(
+                NotificationDeliveryModel.id == delivery_id,
+                NotificationDeliveryModel.status == DeliveryStatus.PROCESSING.value,
+                NotificationDeliveryModel.claim_token == claim_token,
+            )
+            .with_for_update()
+        )
+        return self._session.scalar(statement)
 
     def get_visible_web_delivery_for_user(
         self,

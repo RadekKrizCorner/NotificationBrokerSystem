@@ -2,7 +2,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import cast
 
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from backend.app_factory import BackendApplicationFactory
 from backend.core.config import Settings
@@ -44,3 +47,25 @@ class TestBackendApplicationFactory:
         factory = BackendApplicationFactory.from_env()
 
         assert isinstance(factory.settings, Settings)
+
+    def test_health_endpoints_report_liveness_and_database_readiness(self) -> None:
+        engine = create_engine(
+            "sqlite+pysqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+        app = BackendApplicationFactory(
+            settings=Settings(
+                database_url="sqlite+pysqlite:///:memory:",
+                jwt_secret="test-secret-long-enough",
+            ),
+            session_factory=session_factory,
+        ).create()
+        client = TestClient(app)
+
+        assert client.get("/health/live").json() == {"status": "live"}
+        readiness = client.get("/health/ready")
+        assert readiness.status_code == 200
+        assert readiness.json() == {"status": "ready"}
+        engine.dispose()

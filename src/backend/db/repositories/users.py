@@ -34,8 +34,7 @@ class UserRepository:
             return []
 
         matching_label_conditions = [
-            and_(UserLabelModel.key == key, UserLabelModel.value == value)
-            for key, value in labels
+            and_(UserLabelModel.key == key, UserLabelModel.value == value) for key, value in labels
         ]
         active_user = UserModel.active.is_(True)
         matches_requested_label = or_(*matching_label_conditions)

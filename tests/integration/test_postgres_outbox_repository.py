@@ -146,11 +146,7 @@ class TestPostgresMigrations:
                 )
             ).all()
 
-        partial_indexes = {
-            row.indexname
-            for row in index_rows
-            if "WHERE" in row.indexdef
-        }
+        partial_indexes = {row.indexname for row in index_rows if "WHERE" in row.indexdef}
         assert {
             "uq_notification_requests_source_idempotency_key",
             "uq_notification_requests_source_deduplication",

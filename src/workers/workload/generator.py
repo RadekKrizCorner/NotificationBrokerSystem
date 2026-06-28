@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -64,9 +65,7 @@ class WorkloadNotificationRequestFactory:
         index = sequence - 1
         audience, audience_description = self._audience(index)
         return {
-            "message": (
-                f"Demo workload notification {sequence:06d} for {audience_description}"
-            ),
+            "message": (f"Demo workload notification {sequence:06d} for {audience_description}"),
             "severity": self.severities[index % len(self.severities)],
             "audience": audience,
             "channels": list(self.channel_variants[index % len(self.channel_variants)]),
@@ -84,17 +83,28 @@ class WorkloadServiceTokenFactory:
         source_service: str,
         jwt_secret: str,
         jwt_algorithm: str,
+        jwt_issuer: str,
+        jwt_audience: str,
+        token_ttl_seconds: int,
     ) -> None:
         self._source_service = source_service
         self._jwt_secret = jwt_secret
         self._jwt_algorithm = jwt_algorithm
+        self._jwt_issuer = jwt_issuer
+        self._jwt_audience = jwt_audience
+        self._token_ttl = timedelta(seconds=token_ttl_seconds)
 
     def create_bearer_token(self) -> str:
+        issued_at = datetime.now(UTC)
         token = jwt.encode(
             {
                 "sub": self._source_service,
                 "type": "service",
                 "scopes": ["notifications:write"],
+                "iat": issued_at,
+                "exp": issued_at + self._token_ttl,
+                "iss": self._jwt_issuer,
+                "aud": self._jwt_audience,
             },
             self._jwt_secret,
             algorithm=self._jwt_algorithm,

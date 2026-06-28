@@ -2,6 +2,8 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy.exc import IntegrityError
+
 from backend.db.models import NotificationRequestModel, OutboxEventModel
 from backend.db.unit_of_work import SqlAlchemyUnitOfWork
 from backend.domain.enums import (
@@ -9,6 +11,7 @@ from backend.domain.enums import (
     NotificationRequestStatus,
     OutboxEventStatus,
 )
+from backend.domain.errors import IdempotencyConflict
 from backend.domain.results import NotificationCreateResult
 from backend.domain.value_objects import NotificationCreationInput
 from backend.services.intake.idempotency import (
@@ -70,9 +73,15 @@ class NotificationCreationService:
                 )
 
             if existing is not None:
+                if existing.payload_fingerprint != fingerprint:
+                    raise IdempotencyConflict(
+                        "idempotency key is already used for a different payload"
+                    )
                 return NotificationCreateResult(
                     notification_id=existing.id,
                     status=NotificationCreateResultStatus.EXISTING,
+                    recipient_count=existing.recipient_count,
+                    delivery_count=existing.delivery_count,
                 )
 
             notification = NotificationRequestModel(
@@ -90,14 +99,44 @@ class NotificationCreationService:
                 created_at=now,
                 updated_at=now,
             )
-            uow.notifications.add(notification)
-            uow.session.flush()
-            uow.outbox.add(self._notification_requested_event(notification, now=now))
-            uow.commit()
+            try:
+                uow.notifications.add(notification)
+                uow.session.flush()
+                uow.outbox.add(self._notification_requested_event(notification, now=now))
+                uow.commit()
+            except IntegrityError as exc:
+                uow.rollback()
+                if idempotency_key is not None:
+                    existing = uow.notifications.find_by_explicit_idempotency_key(
+                        source_service=source_service,
+                        idempotency_key=idempotency_key,
+                    )
+                elif deduplication_hash is not None and window_start is not None:
+                    existing = uow.notifications.find_by_fallback_hash(
+                        source_service=source_service,
+                        deduplication_hash=deduplication_hash,
+                        deduplication_window_start=window_start,
+                    )
+                else:
+                    existing = None
+                if existing is None:
+                    raise
+                if existing.payload_fingerprint != fingerprint:
+                    raise IdempotencyConflict(
+                        "idempotency key is already used for a different payload"
+                    ) from exc
+                return NotificationCreateResult(
+                    notification_id=existing.id,
+                    status=NotificationCreateResultStatus.EXISTING,
+                    recipient_count=existing.recipient_count,
+                    delivery_count=existing.delivery_count,
+                )
 
             return NotificationCreateResult(
                 notification_id=notification.id,
                 status=NotificationCreateResultStatus.CREATED,
+                recipient_count=notification.recipient_count,
+                delivery_count=notification.delivery_count,
             )
 
     def _aware_utc_now(self) -> datetime:

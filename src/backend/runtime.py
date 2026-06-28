@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from argparse import ArgumentParser
 from collections.abc import Callable, Sequence
 from time import sleep as default_sleep
@@ -15,6 +16,8 @@ from workers.factory import (
     OutboxWorkerFactory,
     WorkloadGeneratorFactory,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class OneShotWorker(Protocol):
@@ -43,17 +46,38 @@ class PollingWorkerRuntime:
         *,
         run_once: Callable[[], object],
         poll_interval_seconds: float,
+        error_backoff_initial_seconds: float = 1.0,
+        error_backoff_max_seconds: float = 30.0,
         sleep: Callable[[float], None] = default_sleep,
     ) -> None:
+        if error_backoff_initial_seconds <= 0:
+            raise ValueError("error backoff initial value must be positive")
+        if error_backoff_max_seconds < error_backoff_initial_seconds:
+            raise ValueError("error backoff maximum must be at least the initial value")
         self._run_once = run_once
         self._poll_interval_seconds = poll_interval_seconds
+        self._error_backoff_initial_seconds = error_backoff_initial_seconds
+        self._error_backoff_max_seconds = error_backoff_max_seconds
+        self._current_error_backoff_seconds = error_backoff_initial_seconds
         self._sleep = sleep
 
     def run_once(self) -> object:
         return self._run_once()
 
-    def run_poll_cycle(self) -> object:
-        result = self.run_once()
+    def run_poll_cycle(self) -> object | None:
+        try:
+            result = self.run_once()
+        except Exception:
+            logger.exception("worker poll cycle failed")
+            delay = self._current_error_backoff_seconds
+            self._current_error_backoff_seconds = min(
+                delay * 2,
+                self._error_backoff_max_seconds,
+            )
+            self._sleep(delay)
+            return None
+
+        self._current_error_backoff_seconds = self._error_backoff_initial_seconds
         self._sleep(self._poll_interval_seconds)
         return result
 
@@ -204,17 +228,13 @@ class NotificationCenterCli:
 
     def _web_delivery_worker(self, factory: object) -> OneShotWorker:
         if not hasattr(factory, "create_web_delivery_worker"):
-            raise TypeError(
-                "delivery worker factory must expose create_web_delivery_worker"
-            )
+            raise TypeError("delivery worker factory must expose create_web_delivery_worker")
         worker = factory.create_web_delivery_worker()
         return self._ensure_one_shot_worker(worker)
 
     def _email_delivery_worker(self, factory: object) -> OneShotWorker:
         if not hasattr(factory, "create_email_delivery_worker"):
-            raise TypeError(
-                "delivery worker factory must expose create_email_delivery_worker"
-            )
+            raise TypeError("delivery worker factory must expose create_email_delivery_worker")
         worker = factory.create_email_delivery_worker()
         return self._ensure_one_shot_worker(worker)
 

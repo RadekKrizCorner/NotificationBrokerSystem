@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from email.message import EmailMessage
-from email.utils import make_msgid
+from pathlib import Path
 from smtplib import SMTP, SMTPException, SMTPResponseException
 from types import TracebackType
 from typing import Protocol
@@ -8,6 +8,7 @@ from typing import Protocol
 from backend.db.models import NotificationDeliveryModel, NotificationRequestModel, UserModel
 from backend.domain.enums import DeliveryOutcomeStatus
 from backend.domain.results import DeliveryOutcome
+from workers.delivery.email_templates import EmailTemplateError, EmailTemplateRenderer
 
 
 class SmtpClient(Protocol):
@@ -34,9 +35,15 @@ class EmailDeliveryAdapter:
         *,
         smtp_factory: Callable[[], SmtpSession],
         from_address: str,
+        template_directory: Path | None = None,
     ) -> None:
         self._smtp_factory = smtp_factory
         self._from_address = from_address
+        self._renderer = (
+            EmailTemplateRenderer.default()
+            if template_directory is None
+            else EmailTemplateRenderer(template_directory=template_directory)
+        )
 
     @classmethod
     def for_mailpit(
@@ -46,10 +53,12 @@ class EmailDeliveryAdapter:
         port: int = 1025,
         from_address: str = "notifications@example.test",
         timeout_seconds: float = 10.0,
+        template_directory: Path | None = None,
     ) -> EmailDeliveryAdapter:
         return cls(
             smtp_factory=lambda: SMTP(host=host, port=port, timeout=timeout_seconds),
             from_address=from_address,
+            template_directory=template_directory,
         )
 
     def deliver(
@@ -59,7 +68,24 @@ class EmailDeliveryAdapter:
         notification: NotificationRequestModel,
         user: UserModel,
     ) -> DeliveryOutcome:
-        message = self._message(notification=notification, user=user)
+        try:
+            message = self._message(
+                delivery=delivery,
+                notification=notification,
+                user=user,
+            )
+        except EmailTemplateError:
+            return DeliveryOutcome(
+                status=DeliveryOutcomeStatus.FAILED_TERMINAL,
+                error_code="email_template_error",
+                error_message="email template rendering failed",
+            )
+        except ValueError:
+            return DeliveryOutcome(
+                status=DeliveryOutcomeStatus.FAILED_TERMINAL,
+                error_code="email_message_error",
+                error_message="email headers or identifiers are invalid",
+            )
         try:
             with self._smtp_factory() as smtp:
                 smtp.send_message(message)
@@ -77,14 +103,45 @@ class EmailDeliveryAdapter:
             provider_message_id=message["Message-ID"],
         )
 
-    def _message(self, *, notification: NotificationRequestModel, user: UserModel) -> EmailMessage:
+    def _message(
+        self,
+        *,
+        delivery: NotificationDeliveryModel,
+        notification: NotificationRequestModel,
+        user: UserModel,
+    ) -> EmailMessage:
+        rendered = self._renderer.render(
+            context={
+                "delivery": {"id": str(delivery.id)},
+                "notification": {
+                    "id": str(notification.id),
+                    "message": notification.message,
+                    "severity": notification.severity,
+                    "source_service": notification.source_service,
+                },
+                "user": {
+                    "id": str(user.id),
+                    "display_name": user.display_name,
+                    "email": user.email,
+                },
+            }
+        )
         message = EmailMessage()
         message["From"] = self._from_address
         message["To"] = user.email
-        message["Subject"] = f"[{notification.severity}] {notification.message}"
-        message["Message-ID"] = make_msgid()
-        message.set_content(notification.message)
+        message["Subject"] = rendered.subject
+        message["Message-ID"] = self._message_id(delivery)
+        message.set_content(rendered.plain_body)
+        message.add_alternative(rendered.html_body, subtype="html")
         return message
+
+    def _message_id(self, delivery: NotificationDeliveryModel) -> str:
+        if delivery.id is None:
+            raise ValueError("delivery id is required")
+        _, separator, domain = self._from_address.rpartition("@")
+        if not separator or not domain or any(character in domain for character in "\r\n <>"):
+            raise ValueError("from address must contain a safe domain")
+        return f"<notification-{delivery.id}@{domain.lower()}>"
 
     def _smtp_response_outcome(self, exc: SMTPResponseException) -> DeliveryOutcome:
         status = (

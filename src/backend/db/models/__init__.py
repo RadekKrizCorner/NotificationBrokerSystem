@@ -13,6 +13,7 @@ from backend.db.models.notifications import (
     NotificationRequestModel,
 )
 from backend.db.models.outbox import OutboxEventModel, ProcessedEventModel
+from backend.db.models.quotas import ProducerQuotaModel
 
 __all__ = [
     "Base",
@@ -24,6 +25,7 @@ __all__ = [
     "NotificationRequestModel",
     "OutboxEventModel",
     "ProcessedEventModel",
+    "ProducerQuotaModel",
     "TimestampMixin",
     "UserGroupModel",
     "UserLabelModel",

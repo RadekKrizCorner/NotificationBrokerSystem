@@ -20,6 +20,7 @@ from backend.db.models import (
 )
 from backend.db.unit_of_work import SqlAlchemyUnitOfWork
 from backend.domain.enums import AudienceType, Channel, DeliveryStatus, Severity
+from backend.domain.errors import FanoutLimitExceeded
 from backend.services.notification_fanout_service import NotificationFanoutService
 
 SessionFactory = sessionmaker[Session]
@@ -50,10 +51,17 @@ def session_factory() -> Iterator[SessionFactory]:
 
 class NotificationFanoutFixtures:
     @staticmethod
-    def service(session_factory: SessionFactory) -> NotificationFanoutService:
+    def service(
+        session_factory: SessionFactory,
+        *,
+        max_recipients: int = 10_000,
+        max_deliveries: int = 20_000,
+    ) -> NotificationFanoutService:
         return NotificationFanoutService(
             unit_of_work_factory=lambda: SqlAlchemyUnitOfWork(session_factory),
             now=lambda: datetime(2026, 6, 24, 12, 0, tzinfo=UTC),
+            max_recipients=max_recipients,
+            max_deliveries=max_deliveries,
         )
 
     @staticmethod
@@ -252,3 +260,35 @@ class TestNotificationFanoutService:
             assert notification is not None
             assert notification.recipient_count == 0
             assert notification.delivery_count == 0
+
+    def test_rejects_fanout_above_recipient_limit(
+        self,
+        session_factory: SessionFactory,
+    ) -> None:
+        notification_id = NotificationFanoutFixtures.seed_users_and_notification(
+            session_factory,
+            audience_type=AudienceType.ALL,
+            audience={"type": AudienceType.ALL.value},
+        )
+        service = NotificationFanoutFixtures.service(session_factory, max_recipients=2)
+
+        with pytest.raises(FanoutLimitExceeded):
+            service.fanout_notification(notification_id)
+
+        with session_factory() as session:
+            assert session.scalar(select(func.count(NotificationRecipientModel.id))) == 0
+            assert session.scalar(select(func.count(NotificationDeliveryModel.id))) == 0
+
+    def test_rejects_fanout_above_delivery_limit(
+        self,
+        session_factory: SessionFactory,
+    ) -> None:
+        notification_id = NotificationFanoutFixtures.seed_users_and_notification(
+            session_factory,
+            audience_type=AudienceType.ALL,
+            audience={"type": AudienceType.ALL.value},
+        )
+        service = NotificationFanoutFixtures.service(session_factory, max_deliveries=5)
+
+        with pytest.raises(FanoutLimitExceeded):
+            service.fanout_notification(notification_id)

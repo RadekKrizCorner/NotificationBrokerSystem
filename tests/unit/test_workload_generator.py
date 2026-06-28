@@ -48,6 +48,9 @@ class WorkloadGeneratorFixtures:
             source_service="demo-workload-generator",
             jwt_secret="test-secret-long-enough-for-hs256",
             jwt_algorithm="HS256",
+            jwt_issuer="notification-center",
+            jwt_audience="notification-center-api",
+            token_ttl_seconds=300,
         )
 
     @staticmethod
@@ -146,12 +149,17 @@ class TestWorkloadServiceTokenFactory:
 
         token = token_factory.create_bearer_token()
 
-        payload = jwt.decode(token, "test-secret-long-enough-for-hs256", algorithms=["HS256"])
-        assert payload == {
-            "sub": "demo-workload-generator",
-            "type": "service",
-            "scopes": ["notifications:write"],
-        }
+        payload = jwt.decode(
+            token,
+            "test-secret-long-enough-for-hs256",
+            algorithms=["HS256"],
+            audience="notification-center-api",
+            issuer="notification-center",
+        )
+        assert payload["sub"] == "demo-workload-generator"
+        assert payload["type"] == "service"
+        assert payload["scopes"] == ["notifications:write"]
+        assert payload["exp"] - payload["iat"] == 300
 
 
 class TestWorkloadGenerator:
@@ -178,6 +186,8 @@ class TestWorkloadGenerator:
             str(client.calls[0]["bearer_token"]),
             "test-secret-long-enough-for-hs256",
             algorithms=["HS256"],
+            audience="notification-center-api",
+            issuer="notification-center",
         )
         assert token_payload["sub"] == "demo-workload-generator"
 

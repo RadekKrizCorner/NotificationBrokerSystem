@@ -86,8 +86,14 @@ class TestRedpandaOutboxPublisher:
         assert result.published_count == 1
         assert message["key"] == str(event_id)
         assert message["payload"] == {
-            "notification_id": str(event_id),
-            "source_service": "billing",
+            "schema_version": 1,
+            "event_id": str(event_id),
+            "event_type": "notification.requested",
+            "occurred_at": RedpandaOutboxFixtures.now.isoformat(),
+            "data": {
+                "notification_id": str(event_id),
+                "source_service": "billing",
+            },
         }
 
         with postgres_session_factory() as session:

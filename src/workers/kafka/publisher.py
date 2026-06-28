@@ -1,9 +1,13 @@
 import asyncio
 import json
+from base64 import b64encode
 from collections.abc import Mapping
+from hashlib import sha256
 from importlib import import_module
 from threading import Thread
 from typing import Any, Protocol, cast
+
+from workers.kafka.consumer import InvalidNotificationKafkaMessage
 
 
 class KafkaProducerClient(Protocol):
@@ -46,6 +50,41 @@ class KafkaEventPublisher:
             sort_keys=True,
         ).encode("utf-8")
         self._producer.send_and_wait(topic=topic, key=encoded_key, value=encoded_payload)
+
+
+class KafkaDeadLetterPublisher:
+    def __init__(
+        self,
+        *,
+        producer: KafkaProducerClient,
+        topic: str,
+        max_original_value_bytes: int = 65_536,
+    ) -> None:
+        self._producer = producer
+        self._topic = topic
+        self._max_original_value_bytes = max_original_value_bytes
+
+    def publish(self, message: InvalidNotificationKafkaMessage) -> None:
+        raw = message.raw_message
+        encoded_key = raw.key or sha256(raw.value).hexdigest().encode("ascii")
+        bounded_value = raw.value[: self._max_original_value_bytes]
+        payload = {
+            "schema_version": 1,
+            "error": {
+                "code": message.error_code,
+                "message": message.error_message,
+            },
+            "original": {
+                "key_base64": b64encode(raw.key).decode("ascii") if raw.key else None,
+                "value_base64": b64encode(bounded_value).decode("ascii"),
+                "value_truncated": len(raw.value) > len(bounded_value),
+            },
+        }
+        encoded_payload = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+
+        self._producer.send_and_wait(topic=self._topic, key=encoded_key, value=encoded_payload)
 
 
 class AioKafkaProducerClient:

@@ -71,8 +71,7 @@ class DemoDataSeeder:
 
     def seed(self) -> DemoSeedResult:
         profiles = [
-            self._profile_factory.create(sequence)
-            for sequence in range(1, self._total_users + 1)
+            self._profile_factory.create(sequence) for sequence in range(1, self._total_users + 1)
         ]
         target_emails = {profile.email for profile in profiles}
 

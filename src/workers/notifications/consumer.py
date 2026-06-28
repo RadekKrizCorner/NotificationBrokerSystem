@@ -6,13 +6,18 @@ from uuid import UUID
 
 from backend.db.unit_of_work import SqlAlchemyUnitOfWork
 from backend.domain.results import NotificationConsumerResult, NotificationFanoutResult
-from workers.kafka.consumer import NotificationKafkaMessage
+from workers.kafka.consumer import (
+    InvalidNotificationKafkaMessage,
+    NotificationKafkaMessage,
+)
 
 UnitOfWorkFactory = Callable[[], AbstractContextManager[SqlAlchemyUnitOfWork]]
 
 
 class NotificationEventConsumer(Protocol):
-    def consume_one(self, *, timeout_seconds: float) -> NotificationKafkaMessage | None:
+    def consume_one(
+        self, *, timeout_seconds: float
+    ) -> NotificationKafkaMessage | InvalidNotificationKafkaMessage | None:
         pass
 
     def commit(self) -> None:
@@ -24,12 +29,18 @@ class NotificationRequestedEventHandler(Protocol):
         pass
 
 
+class DeadLetterPublisher(Protocol):
+    def publish(self, message: InvalidNotificationKafkaMessage) -> None:
+        pass
+
+
 class NotificationConsumerWorker:
     def __init__(
         self,
         *,
         event_consumer: NotificationEventConsumer,
         handler: NotificationRequestedEventHandler,
+        dead_letter_publisher: DeadLetterPublisher,
         unit_of_work_factory: UnitOfWorkFactory,
         consumer_name: str,
         now: Callable[[], datetime],
@@ -38,6 +49,7 @@ class NotificationConsumerWorker:
     ) -> None:
         self._event_consumer = event_consumer
         self._handler = handler
+        self._dead_letter_publisher = dead_letter_publisher
         self._unit_of_work_factory = unit_of_work_factory
         self._consumer_name = consumer_name
         self._now = now
@@ -49,6 +61,7 @@ class NotificationConsumerWorker:
         processed_count = 0
         duplicate_count = 0
         committed_count = 0
+        dead_lettered_count = 0
 
         for _ in range(self._batch_size):
             message = self._event_consumer.consume_one(
@@ -58,6 +71,13 @@ class NotificationConsumerWorker:
                 break
 
             received_count += 1
+            if isinstance(message, InvalidNotificationKafkaMessage):
+                self._dead_letter_publisher.publish(message)
+                dead_lettered_count += 1
+                self._event_consumer.commit()
+                committed_count += 1
+                continue
+
             event_id = self._event_id(message)
 
             if self._already_processed(event_id):
@@ -77,10 +97,11 @@ class NotificationConsumerWorker:
             processed_count=processed_count,
             duplicate_count=duplicate_count,
             committed_count=committed_count,
+            dead_lettered_count=dead_lettered_count,
         )
 
     def _event_id(self, message: NotificationKafkaMessage) -> UUID:
-        return UUID(message.key)
+        return message.event_id
 
     def _already_processed(self, event_id: UUID) -> bool:
         with self._unit_of_work_factory() as uow:

@@ -8,9 +8,7 @@ class LocalObservabilityConfigFixtures:
     compose_path = PROJECT_ROOT / "docker-compose.yml"
     env_example_path = PROJECT_ROOT / ".env.example"
     prometheus_path = PROJECT_ROOT / "ops/prometheus/prometheus.yml"
-    grafana_datasource_path = (
-        PROJECT_ROOT / "ops/grafana/provisioning/datasources/prometheus.yml"
-    )
+    grafana_datasource_path = PROJECT_ROOT / "ops/grafana/provisioning/datasources/prometheus.yml"
     grafana_dashboard_provider_path = (
         PROJECT_ROOT / "ops/grafana/provisioning/dashboards/dashboards.yml"
     )
@@ -61,9 +59,7 @@ class TestLocalObservabilityConfig:
             assert f"job_name: {job_name}" in prometheus_config
 
     def test_grafana_provisions_prometheus_and_dashboards(self) -> None:
-        datasource_config = (
-            LocalObservabilityConfigFixtures.grafana_datasource_path.read_text()
-        )
+        datasource_config = LocalObservabilityConfigFixtures.grafana_datasource_path.read_text()
         dashboard_provider = (
             LocalObservabilityConfigFixtures.grafana_dashboard_provider_path.read_text()
         )
@@ -73,12 +69,8 @@ class TestLocalObservabilityConfig:
         assert "/var/lib/grafana/dashboards" in dashboard_provider
 
     def test_grafana_includes_red_and_use_dashboards(self) -> None:
-        red_dashboard = json.loads(
-            LocalObservabilityConfigFixtures.red_dashboard_path.read_text()
-        )
-        use_dashboard = json.loads(
-            LocalObservabilityConfigFixtures.use_dashboard_path.read_text()
-        )
+        red_dashboard = json.loads(LocalObservabilityConfigFixtures.red_dashboard_path.read_text())
+        use_dashboard = json.loads(LocalObservabilityConfigFixtures.use_dashboard_path.read_text())
 
         assert red_dashboard["title"] == "Notification Center RED"
         assert use_dashboard["title"] == "Notification Center USE"
@@ -98,9 +90,7 @@ class TestLocalObservabilityConfig:
             "Kafka CPU Usage",
             "Kafka Topics And Partitions",
             "Outbox Backlog Age",
-        }.issubset(
-            {panel["title"] for panel in use_dashboard["panels"]}
-        )
+        }.issubset({panel["title"] for panel in use_dashboard["panels"]})
 
     def test_grafana_includes_pipeline_and_kafka_dashboard(self) -> None:
         pipeline_dashboard = json.loads(

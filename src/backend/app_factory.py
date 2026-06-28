@@ -4,9 +4,11 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
+from backend.api.routers.health import router as health_router
 from backend.api.routers.notifications import router as notifications_router
 from backend.api.routers.users import router as users_router
 from backend.core.config import Settings
+from backend.core.http_limits import RequestBodyLimitMiddleware
 from backend.core.metrics import (
     PrometheusHttpMiddleware,
     PrometheusMetrics,
@@ -37,6 +39,10 @@ class BackendApplicationFactory:
 
     def create(self) -> FastAPI:
         app = FastAPI(title="Notification Center")
+        app.add_middleware(
+            RequestBodyLimitMiddleware,
+            max_body_bytes=self.settings.max_request_body_bytes,
+        )
         metrics = self._resolved_metrics()
         session_factory = self._resolved_session_factory()
         now = self._now or self._default_now
@@ -82,6 +88,7 @@ class BackendApplicationFactory:
             session_factory=session_factory,
             metrics=metrics,
             now=now,
+            refresh_interval_seconds=self.settings.metrics_refresh_interval_seconds,
         )
         endpoint = PrometheusMetricsEndpoint(
             metrics=metrics,
@@ -97,6 +104,7 @@ class BackendApplicationFactory:
     def _register_routers(self, app: FastAPI) -> None:
         app.include_router(notifications_router)
         app.include_router(users_router)
+        app.include_router(health_router)
 
     def _resolved_session_factory(self) -> sessionmaker[Session]:
         if self._session_factory is not None:

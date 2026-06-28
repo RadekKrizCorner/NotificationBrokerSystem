@@ -18,6 +18,7 @@ INTEGRATION_KAFKA_BOOTSTRAP_SERVERS_ENV = "INTEGRATION_KAFKA_BOOTSTRAP_SERVERS"
 POSTGRES_STARTUP_TIMEOUT_SECONDS = 30
 
 APP_TABLES = (
+    "producer_quotas",
     "notification_action_invocations",
     "delivery_attempts",
     "notification_deliveries",

@@ -54,6 +54,9 @@ The stack runs migrations, seeds 5,000 demo users, starts the API, Redpanda Kafk
 Mailpit, Prometheus, Grafana, the outbox publisher, notification consumer, web delivery worker,
 email delivery worker, and a REST workload generator.
 
+All published Compose ports bind to `127.0.0.1`; the demo is not exposed on every host
+interface. Application containers run as an unprivileged user.
+
 Useful URLs:
 
 - API docs: `http://localhost:8000/docs`
@@ -92,6 +95,26 @@ fan out, and deliver from durable database state.
 
 See [docs/architecture.md](docs/architecture.md) for the detailed tradeoffs around idempotency,
 outbox publishing, retry/replay, delivery semantics, and production hardening.
+
+## Email templates
+
+Email delivery sends a multipart message with repository-owned Jinja2 templates:
+
+- `src/workers/delivery/templates/subject.j2`
+- `src/workers/delivery/templates/plain.txt.j2`
+- `src/workers/delivery/templates/html.html.j2`
+
+HTML rendering uses autoescaping and strict undefined variables. To override all three templates,
+set `NOTIFICATION_CENTER_EMAIL_TEMPLATE_DIRECTORY` to a mounted directory containing those exact
+filenames. Message IDs are deterministic per delivery, so SMTP retries reuse the same identifier.
+
+## Production configuration
+
+The one-command demo uses `NOTIFICATION_CENTER_RUNTIME_MODE=local`. A production deployment
+should set `NOTIFICATION_CENTER_RUNTIME_MODE=production`, provide a unique
+`NOTIFICATION_CENTER_JWT_SECRET`, and keep PostgreSQL, Kafka, SMTP, Grafana, and metrics ports on
+private networks. Production mode rejects the repository's demo JWT secret. Tokens are validated
+for signature, expiration, issued-at time, issuer, audience, subject, and token type.
 
 ## Baseline Throughput
 
@@ -151,13 +174,13 @@ the queue/backlog, and which delivery channel needs more worker capacity?
 ## Known Limitations
 
 - Users, groups, and labels are local demo data, not a real identity directory.
-- JWT validation is intentionally local and static; production needs issuer validation, key
-  rotation, and secret management.
+- JWT signing uses a static HMAC secret; production still needs managed secret rotation or an
+  asymmetric identity provider.
 - Email delivery uses Mailpit locally and does not model provider bounces or provider-side
   idempotency.
 - Retry is controlled business replay from PostgreSQL delivery state, not blind Kafka topic rewind.
-- Dead-letter queues, operator replay tooling, Kubernetes manifests, and autoscaling policies are
-  deferred production hardening work.
+- Poison Kafka messages are stored in a DLQ, but operator replay tooling, Kubernetes manifests,
+  and autoscaling policies remain outside this demo.
 - The baseline throughput numbers are from local Docker Desktop, not a production capacity claim.
 
 ## Development Checks
@@ -165,7 +188,8 @@ the queue/backlog, and which delivery channel needs more worker capacity?
 Unit tests run without external services:
 
 ```bash
-.venv/bin/python -m pytest tests/unit -q
+uv sync --frozen --extra dev
+uv run python -m pytest tests/unit -q
 ```
 
 PostgreSQL and Redpanda integration tests use `docker-compose.integration.yml` when deeper local
@@ -175,6 +199,6 @@ validation is needed.
 docker compose -f docker-compose.integration.yml up -d postgres-integration redpanda-integration
 INTEGRATION_DATABASE_URL=postgresql+psycopg://notification:notification@localhost:55432/notification_center_test \
 INTEGRATION_KAFKA_BOOTSTRAP_SERVERS=localhost:19092 \
-  .venv/bin/python -m pytest tests/integration -q
+  uv run python -m pytest tests/integration -q
 docker compose -f docker-compose.integration.yml down
 ```

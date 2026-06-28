@@ -13,6 +13,8 @@ from backend.domain.enums import (
 class NotificationCreateResult:
     notification_id: UUID
     status: NotificationCreateResultStatus
+    recipient_count: int
+    delivery_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +65,7 @@ class OutboxPublisherResult:
 @dataclass(frozen=True, slots=True)
 class NotificationConsumerResult:
     received_count: int
+    dead_lettered_count: int
     processed_count: int
     duplicate_count: int
     committed_count: int

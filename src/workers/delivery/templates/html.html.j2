@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+  <body>
+    <p>Hello {{ user.display_name }},</p>
+    <p style="white-space: pre-wrap">{{ notification.message }}</p>
+    <dl>
+      <dt>Severity</dt><dd>{{ notification.severity }}</dd>
+      <dt>Source</dt><dd>{{ notification.source_service }}</dd>
+      <dt>Notification ID</dt><dd>{{ notification.id }}</dd>
+    </dl>
+  </body>
+</html>

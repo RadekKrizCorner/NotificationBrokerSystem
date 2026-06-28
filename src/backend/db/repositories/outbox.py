@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
@@ -41,9 +42,27 @@ class OutboxRepository:
         for event in events:
             event.status = OutboxEventStatus.PUBLISHING.value
             event.claimed_by = worker_id
+            event.claim_token = uuid4()
             event.lease_expires_at = lease_expires_at
             event.updated_at = now
         return events
+
+    def get_claimed_event_for_update(
+        self,
+        *,
+        event_id: UUID,
+        claim_token: UUID,
+    ) -> OutboxEventModel | None:
+        statement = (
+            select(OutboxEventModel)
+            .where(
+                OutboxEventModel.id == event_id,
+                OutboxEventModel.status == OutboxEventStatus.PUBLISHING.value,
+                OutboxEventModel.claim_token == claim_token,
+            )
+            .with_for_update()
+        )
+        return self._session.scalar(statement)
 
     def oldest_publishable_event_age_seconds(self, *, now: datetime) -> float:
         statement = select(func.min(OutboxEventModel.created_at)).where(
@@ -61,6 +80,7 @@ class OutboxRepository:
         event.published_at = published_at
         event.next_attempt_at = published_at
         event.claimed_by = None
+        event.claim_token = None
         event.lease_expires_at = None
         event.last_error = None
         event.updated_at = published_at
@@ -77,6 +97,7 @@ class OutboxRepository:
         event.attempts = (event.attempts or 0) + 1
         event.last_error = error_message
         event.claimed_by = None
+        event.claim_token = None
         event.lease_expires_at = None
         event.updated_at = failed_at
 

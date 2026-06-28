@@ -160,6 +160,52 @@ class TestPollingWorkerRuntime:
         assert worker.run_count == 1
         assert sleeper.calls == [1.5]
 
+    def test_run_poll_cycle_uses_capped_exponential_backoff_after_errors(self) -> None:
+        calls = 0
+        sleeper = RecordingSleeper()
+
+        def fail() -> object:
+            nonlocal calls
+            calls += 1
+            raise RuntimeError("database unavailable")
+
+        runtime = PollingWorkerRuntime(
+            run_once=fail,
+            poll_interval_seconds=1.5,
+            error_backoff_initial_seconds=2.0,
+            error_backoff_max_seconds=5.0,
+            sleep=sleeper.sleep,
+        )
+
+        assert runtime.run_poll_cycle() is None
+        assert runtime.run_poll_cycle() is None
+        assert runtime.run_poll_cycle() is None
+        assert calls == 3
+        assert sleeper.calls == [2.0, 4.0, 5.0]
+
+    def test_success_resets_error_backoff(self) -> None:
+        outcomes = iter([RuntimeError("first"), "processed", RuntimeError("third")])
+        sleeper = RecordingSleeper()
+
+        def run_once() -> object:
+            outcome = next(outcomes)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        runtime = PollingWorkerRuntime(
+            run_once=run_once,
+            poll_interval_seconds=1.5,
+            error_backoff_initial_seconds=2.0,
+            error_backoff_max_seconds=5.0,
+            sleep=sleeper.sleep,
+        )
+
+        assert runtime.run_poll_cycle() is None
+        assert runtime.run_poll_cycle() == "processed"
+        assert runtime.run_poll_cycle() is None
+        assert sleeper.calls == [2.0, 1.5, 2.0]
+
 
 class TestNotificationCenterCli:
     def test_api_role_runs_uvicorn_app_from_settings(self) -> None:

@@ -6,6 +6,7 @@ from fastapi import Depends, HTTPException, Response, status
 from backend.api.dependencies import (
     get_current_principal,
     get_notification_creation_service,
+    get_producer_quota_service,
     get_retry_service,
 )
 from backend.api.routing import ApiRoutes, route
@@ -16,7 +17,9 @@ from backend.api.schemas.notification_responses import (
 )
 from backend.core.auth import AuthenticatedPrincipal
 from backend.domain.enums import ActionInvocationResult, NotificationCreateResultStatus
+from backend.domain.errors import IdempotencyConflict, ProducerQuotaExceeded
 from backend.services.notification_service import NotificationCreationService
+from backend.services.quota_service import ProducerQuotaService
 from backend.services.retry_service import RetryService
 
 
@@ -38,21 +41,40 @@ class NotificationRoutes(ApiRoutes):
             NotificationCreationService,
             Depends(get_notification_creation_service),
         ],
+        quota_service: Annotated[
+            ProducerQuotaService,
+            Depends(get_producer_quota_service),
+        ],
     ) -> CreateNotificationResponse:
         principal.require_type("service")
         principal.require_scope("notifications:write")
 
-        result = service.create_notification(
-            source_service=principal.subject,
-            request=request.to_domain(),
-            idempotency_key=request.idempotency_key,
-        )
+        try:
+            quota_service.consume(source_service=principal.subject)
+        except ProducerQuotaExceeded as exc:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="producer request quota exceeded",
+                headers={"Retry-After": str(exc.retry_after_seconds)},
+            ) from exc
+
+        try:
+            result = service.create_notification(
+                source_service=principal.subject,
+                request=request.to_domain(),
+                idempotency_key=request.idempotency_key,
+            )
+        except IdempotencyConflict as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
 
         return CreateNotificationResponse(
             notification_id=result.notification_id,
             status="accepted",
-            recipient_count=0,
-            delivery_count=0,
+            recipient_count=result.recipient_count,
+            delivery_count=result.delivery_count,
             deduplicated=result.status is NotificationCreateResultStatus.EXISTING,
         )
 

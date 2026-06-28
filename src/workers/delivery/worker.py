@@ -1,6 +1,8 @@
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 from backend.db.models import (
     DeliveryAttemptModel,
@@ -12,6 +14,12 @@ from backend.domain.results import DeliveryOutcome, DeliveryWorkerResult
 from workers.delivery.base import DeliveryAdapter
 
 UnitOfWorkFactory = Callable[[], AbstractContextManager[SqlAlchemyUnitOfWork]]
+
+
+@dataclass(frozen=True)
+class ClaimedDelivery:
+    delivery_id: UUID
+    claim_token: UUID
 
 
 class DeliveryWorker:
@@ -50,22 +58,63 @@ class DeliveryWorker:
                 lease_expires_at=lease_expires_at,
                 channels=self._channels,
             )
-            processed_count = 0
-            for delivery in deliveries:
-                outcome = self._deliver(delivery)
-                self._record_outcome(
-                    uow,
-                    delivery=delivery,
-                    outcome=outcome,
-                    now=now,
-                )
-                processed_count += 1
+            claims = [
+                ClaimedDelivery(delivery_id=delivery.id, claim_token=delivery.claim_token)
+                for delivery in deliveries
+                if delivery.claim_token is not None
+            ]
             uow.commit()
 
+        processed_count = 0
+        for claim in claims:
+            delivery = self._load_claimed_delivery_context(claim)
+            if delivery is None:
+                continue
+            outcome = self._deliver(delivery)
+            if self._finalize_claimed_delivery(
+                claim=claim,
+                outcome=outcome,
+                now=now,
+            ):
+                processed_count += 1
+
         return DeliveryWorkerResult(
-            claimed_count=len(deliveries),
+            claimed_count=len(claims),
             processed_count=processed_count,
         )
+
+    def _load_claimed_delivery_context(
+        self,
+        claim: ClaimedDelivery,
+    ) -> NotificationDeliveryModel | None:
+        with self._unit_of_work_factory() as uow:
+            return uow.notifications.get_claimed_delivery_context(
+                delivery_id=claim.delivery_id,
+                claim_token=claim.claim_token,
+            )
+
+    def _finalize_claimed_delivery(
+        self,
+        *,
+        claim: ClaimedDelivery,
+        outcome: DeliveryOutcome,
+        now: datetime,
+    ) -> bool:
+        with self._unit_of_work_factory() as uow:
+            delivery = uow.notifications.get_claimed_delivery_for_update(
+                delivery_id=claim.delivery_id,
+                claim_token=claim.claim_token,
+            )
+            if delivery is None:
+                return False
+            self._record_outcome(
+                uow,
+                delivery=delivery,
+                outcome=outcome,
+                now=now,
+            )
+            uow.commit()
+            return True
 
     def _aware_utc_now(self) -> datetime:
         now = self._now()
@@ -91,11 +140,18 @@ class DeliveryWorker:
                 error_message=f"missing delivery adapter for {channel.value}",
             )
 
-        return adapter.deliver(
-            delivery=delivery,
-            notification=delivery.notification,
-            user=delivery.user,
-        )
+        try:
+            return adapter.deliver(
+                delivery=delivery,
+                notification=delivery.notification,
+                user=delivery.user,
+            )
+        except Exception as exc:
+            return DeliveryOutcome(
+                status=DeliveryOutcomeStatus.FAILED_RETRYABLE,
+                error_code="adapter_exception",
+                error_message=f"delivery adapter raised {type(exc).__name__}",
+            )
 
     def _record_outcome(
         self,
@@ -132,6 +188,7 @@ class DeliveryWorker:
         delivery.processing_started_at = None
         delivery.lease_expires_at = None
         delivery.claimed_by = None
+        delivery.claim_token = None
 
         uow.notifications.add_delivery_attempt(
             DeliveryAttemptModel(

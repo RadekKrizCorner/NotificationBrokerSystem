@@ -1,15 +1,12 @@
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from backend.db.models import (
-    NotificationDeliveryModel,
-    NotificationRecipientModel,
-    NotificationRequestModel,
-)
+from backend.db.models import NotificationRequestModel
 from backend.db.unit_of_work import SqlAlchemyUnitOfWork
 from backend.domain.enums import AudienceType, Channel, DeliveryStatus
+from backend.domain.errors import FanoutLimitExceeded
 from backend.domain.results import NotificationFanoutResult
 from backend.domain.value_objects import AudienceSelection
 from backend.services.audience_service import AudienceResolutionService
@@ -23,9 +20,13 @@ class NotificationFanoutService:
         *,
         unit_of_work_factory: UnitOfWorkFactory,
         now: Callable[[], datetime],
+        max_recipients: int = 10_000,
+        max_deliveries: int = 20_000,
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
         self._now = now
+        self._max_recipients = max_recipients
+        self._max_deliveries = max_deliveries
 
     def fanout_notification(self, notification_id: UUID) -> NotificationFanoutResult:
         next_attempt_at = self._aware_utc_now()
@@ -37,37 +38,51 @@ class NotificationFanoutService:
 
             audience = self._audience_selection(notification)
             user_ids = AudienceResolutionService(uow.users).resolve(audience)
-            recipient_ids_by_user = uow.notifications.list_recipient_ids_by_user(notification.id)
-            delivery_pairs = uow.notifications.list_delivery_pairs(notification.id)
             channels = tuple(Channel(channel) for channel in notification.channels)
 
+            requested_delivery_count = len(user_ids) * len(channels)
+            if (
+                len(user_ids) > self._max_recipients
+                or requested_delivery_count > self._max_deliveries
+            ):
+                raise FanoutLimitExceeded(
+                    recipients=len(user_ids),
+                    deliveries=requested_delivery_count,
+                )
+            recipient_ids_by_user = uow.notifications.list_recipient_ids_by_user(notification.id)
+            missing_user_ids = [
+                user_id for user_id in user_ids if user_id not in recipient_ids_by_user
+            ]
+            uow.notifications.add_recipients_ignore_conflicts(
+                notification_id=notification.id,
+                user_ids=missing_user_ids,
+                created_at=next_attempt_at,
+            )
+            recipient_ids_by_user = uow.notifications.list_recipient_ids_by_user(notification.id)
+            delivery_pairs = uow.notifications.list_delivery_pairs(notification.id)
+            delivery_values: list[dict[str, object]] = []
             for user_id in user_ids:
-                if user_id not in recipient_ids_by_user:
-                    recipient = NotificationRecipientModel(
-                        notification_id=notification.id,
-                        user_id=user_id,
-                    )
-                    uow.notifications.add_recipient(recipient)
-                    uow.session.flush()
-                    recipient_ids_by_user[user_id] = recipient.id
-
                 recipient_id = recipient_ids_by_user[user_id]
                 for channel in channels:
-                    delivery_pair = (user_id, channel)
-                    if delivery_pair in delivery_pairs:
+                    if (user_id, channel) in delivery_pairs:
                         continue
-                    delivery = NotificationDeliveryModel(
-                        notification_recipient_id=recipient_id,
-                        notification_id=notification.id,
-                        user_id=user_id,
-                        channel=channel.value,
-                        status=DeliveryStatus.PENDING.value,
-                        next_attempt_at=next_attempt_at,
-                        created_at=next_attempt_at,
-                        updated_at=next_attempt_at,
+                    delivery_values.append(
+                        {
+                            "id": uuid4(),
+                            "notification_recipient_id": recipient_id,
+                            "notification_id": notification.id,
+                            "user_id": user_id,
+                            "channel": channel.value,
+                            "status": DeliveryStatus.PENDING.value,
+                            "attempt_count": 0,
+                            "max_attempts": 3,
+                            "next_attempt_at": next_attempt_at,
+                            "created_at": next_attempt_at,
+                            "updated_at": next_attempt_at,
+                        }
                     )
-                    uow.notifications.add_delivery(delivery)
-                    delivery_pairs.add(delivery_pair)
+            uow.notifications.add_deliveries_ignore_conflicts(values=delivery_values)
+            delivery_pairs = uow.notifications.list_delivery_pairs(notification.id)
 
             notification.recipient_count = len(recipient_ids_by_user)
             notification.delivery_count = len(delivery_pairs)

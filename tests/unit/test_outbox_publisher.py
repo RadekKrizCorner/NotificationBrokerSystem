@@ -128,7 +128,16 @@ class TestOutboxPublisher:
             (
                 "notifications.requests",
                 "notification-1",
-                {"notification_id": "notification-1", "source_service": "billing"},
+                {
+                    "schema_version": 1,
+                    "event_id": str(event_id),
+                    "event_type": "notification.requested",
+                    "occurred_at": OutboxPublisherFixtures.now.isoformat(),
+                    "data": {
+                        "notification_id": "notification-1",
+                        "source_service": "billing",
+                    },
+                },
             )
         ]
 
@@ -138,6 +147,7 @@ class TestOutboxPublisher:
             assert event.status == OutboxEventStatus.PUBLISHED.value
             assert event.published_at == OutboxPublisherFixtures.now.replace(tzinfo=None)
             assert event.claimed_by is None
+            assert event.claim_token is None
             assert event.lease_expires_at is None
             assert event.last_error is None
 
@@ -317,9 +327,7 @@ class TestOutboxPublisher:
             events = {
                 event.id: event.status
                 for event in session.scalars(
-                    select(OutboxEventModel).where(
-                        OutboxEventModel.id.in_([first_id, second_id])
-                    )
+                    select(OutboxEventModel).where(OutboxEventModel.id.in_([first_id, second_id]))
                 )
             }
             assert list(events.values()).count(OutboxEventStatus.PUBLISHED.value) == 1

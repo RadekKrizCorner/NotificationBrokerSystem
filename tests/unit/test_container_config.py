@@ -11,6 +11,10 @@ class TestContainerConfig:
 
         assert 'CMD ["python", "-m", "backend.runtime", "api"]' in dockerfile
         assert "PYTHONPATH=/app/src" in dockerfile
+        assert "USER notification:notification" in dockerfile
+        assert "uv sync --frozen --no-dev --no-editable" in dockerfile
+        assert "pip install --no-cache-dir --upgrade pip" not in dockerfile
+        assert (ContainerConfigFixtures.root / "uv.lock").is_file()
 
     def test_github_actions_builds_container_image(self) -> None:
         workflow = (ContainerConfigFixtures.root / ".github/workflows/ci.yml").read_text()
@@ -29,11 +33,15 @@ class TestContainerConfig:
         assert "email-delivery-worker:" in compose_file
         assert "  delivery-worker:" not in compose_file
         assert "workload-generator:" in compose_file
+        assert "127.0.0.1:8000:8000" in compose_file
+        assert "/health/ready" in compose_file
+        assert "restart: unless-stopped" in compose_file
         assert 'command: ["python", "-m", "backend.runtime", "workload-generator"]' in compose_file
 
     def test_compose_tunes_local_delivery_and_workload_rates(self) -> None:
         compose_file = (ContainerConfigFixtures.root / "docker-compose.yml").read_text()
 
+        assert "postgres-data:/var/lib/postgresql" in compose_file
         assert "NOTIFICATION_CENTER_DEMO_SEED_USER_COUNT: 5000" in compose_file
         assert "NOTIFICATION_CENTER_DELIVERY_BATCH_SIZE: 500" in compose_file
         assert "NOTIFICATION_CENTER_DELIVERY_POLL_INTERVAL_SECONDS: 0.2" in compose_file

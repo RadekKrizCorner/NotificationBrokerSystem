@@ -1,17 +1,29 @@
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictStr,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from backend.domain.enums import AudienceType, Channel, Severity
 from backend.domain.value_objects import AudienceSelection, NotificationCreationInput
+
+GroupName = Annotated[StrictStr, StringConstraints(max_length=128)]
+LabelKey = Annotated[StrictStr, StringConstraints(max_length=64)]
+LabelValue = Annotated[StrictStr, StringConstraints(max_length=256)]
 
 
 class AudienceSelector(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["all", "group", "labels"]
-    group: StrictStr | None = None
-    labels: dict[StrictStr, StrictStr] | None = None
+    group: GroupName | None = None
+    labels: dict[LabelKey, LabelValue] | None = Field(default=None, max_length=20)
 
     @model_validator(mode="before")
     @classmethod
@@ -100,11 +112,7 @@ class CreateNotificationRequest(BaseModel):
         return value
 
     def to_domain(self) -> NotificationCreationInput:
-        labels = (
-            tuple(self.audience.labels.items())
-            if self.audience.labels is not None
-            else None
-        )
+        labels = tuple(self.audience.labels.items()) if self.audience.labels is not None else None
         return NotificationCreationInput(
             message=self.message,
             severity=self.severity,
